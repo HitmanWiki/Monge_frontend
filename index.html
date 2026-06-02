@@ -5493,11 +5493,10 @@ function closeAIModal() {
   if (modal) modal.classList.remove('open');
 }
 // ══════════════════════════════════════════════════════════════════
-//  SEAMLESS SOLANA WALLET CONNECTION
+//  ROBUST SOLANA WALLET CONNECTION - FIXED PHANTOM ERROR
 // ══════════════════════════════════════════════════════════════════
 
 let wallet = null;
-let walletAdapter = null;
 
 // Fixed RPC URL
 const FIXED_RPC = 'https://mainnet.helius-rpc.com/?api-key=9e676d35-b97a-4f46-b454-a41e9b7c28be';
@@ -5515,6 +5514,24 @@ function isAndroid() {
     return /Android/i.test(navigator.userAgent);
 }
 
+// Get provider safely
+function getProvider() {
+    // Try multiple ways to get the Phantom provider
+    if (window.phantom?.solana) {
+        console.log('Found provider via window.phantom.solana');
+        return window.phantom.solana;
+    }
+    if (window.solana?.isPhantom) {
+        console.log('Found provider via window.solana');
+        return window.solana;
+    }
+    if (window.solflare?.isSolflare) {
+        console.log('Found Solflare provider');
+        return window.solflare;
+    }
+    return null;
+}
+
 // Main connect function - called from your button
 async function openWcModal() {
     if (wallet) {
@@ -5524,202 +5541,199 @@ async function openWcModal() {
     
     console.log('🔌 Opening wallet connection...');
     console.log('📱 Mobile:', isMobile());
-    console.log('🔍 Provider exists:', !!window.solana);
     
-    // If Phantom is injected (desktop or Phantom mobile browser)
-    if (window.solana?.isPhantom) {
-        console.log('✅ Phantom detected, connecting directly...');
-        await connectWallet('phantom');
+    const provider = getProvider();
+    console.log('🔍 Provider found:', !!provider);
+    
+    // If provider exists, connect directly
+    if (provider) {
+        console.log('✅ Provider detected, connecting...');
+        await connectToWallet(provider);
         return;
     }
     
-    // If Solflare is injected
-    if (window.solflare?.isSolflare) {
-        console.log('✅ Solflare detected, connecting directly...');
-        await connectWallet('solflare');
-        return;
-    }
-    
-    // On mobile - show deep link options
+    // No provider found
     if (isMobile()) {
+        // On mobile, offer to open in Phantom browser
         showMobileWalletModal();
     } else {
-        // Desktop - show wallet selection modal
-        showDesktopWalletModal();
+        // On desktop, show install prompt
+        showDesktopInstallPrompt();
     }
 }
 
-// Connect specific wallet
-async function connectWallet(walletType) {
+// Connect to detected wallet
+async function connectToWallet(provider) {
     try {
-        let provider;
-        
-        if (walletType === 'phantom') {
-            provider = window.solana;
-            
-            // On mobile without Phantom browser, show deep link
-            if (isMobile() && !provider) {
-                openPhantomDeepLink();
-                return;
-            }
-            
-            if (!provider) {
-                window.open('https://phantom.app/download', '_blank');
-                toast('Please install Phantom wallet', 'er');
-                return;
-            }
-        } else if (walletType === 'solflare') {
-            provider = window.solflare;
-            if (!provider) {
-                window.open('https://solflare.com/download', '_blank');
-                toast('Please install Solflare wallet', 'er');
-                return;
-            }
-        } else if (walletType === 'backpack') {
-            provider = window.backpack;
-            if (!provider) {
-                window.open('https://backpack.app/download', '_blank');
-                toast('Please install Backpack wallet', 'er');
-                return;
-            }
-        }
-        
-        if (!provider) {
-            toast('Wallet not found. Please install it first.', 'er');
+        // Check if already connected
+        if (provider.isConnected && provider.publicKey) {
+            console.log('Already connected:', provider.publicKey.toString());
+            setupWallet(provider);
             return;
         }
         
-        // Connect
-        console.log('🔗 Connecting to', walletType, '...');
-        const response = await provider.connect();
-        const publicKey = response.publicKey.toString();
+        // Try to connect
+        console.log('Attempting connection...');
         
-        wallet = {
-            publicKey: publicKey,
-            provider: provider,
-            walletType: walletType,
-            signTransaction: provider.signTransaction?.bind(provider),
-            signAllTransactions: provider.signAllTransactions?.bind(provider),
-            signMessage: provider.signMessage?.bind(provider),
-            connection: new solanaWeb3.Connection(FIXED_RPC, 'confirmed')
-        };
-        
-        console.log('✅ Connected:', publicKey);
-        updateWalletUI(publicKey);
-        closeAllModals();
-        toast('Wallet connected! ✅', 'ok');
-        
-        // Save connection preference
-        localStorage.setItem('walletType', walletType);
-        
-        // Listen for account changes
-        if (provider.on) {
-            provider.on('accountChanged', (publicKey) => {
-                if (publicKey) {
-                    wallet.publicKey = publicKey.toString();
-                    updateWalletUI(wallet.publicKey);
-                    loadBalance();
-                } else {
-                    disconnectWallet();
-                }
-            });
+        let response;
+        try {
+            // Method 1: Direct connect
+            response = await provider.connect();
+        } catch (err1) {
+            console.log('Direct connect failed:', err1.message);
             
-            provider.on('disconnect', () => {
-                disconnectWallet();
-            });
+            // Method 2: Try with onlyIfTrusted first
+            try {
+                response = await provider.connect({ onlyIfTrusted: true });
+            } catch (err2) {
+                // Method 3: If Phantom mobile, they might need to tap
+                if (isMobile() && provider.isPhantom) {
+                    console.log('Trying mobile-specific connection...');
+                    // Wait a moment and try again
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    response = await provider.connect({ onlyIfTrusted: false });
+                } else {
+                    throw err2;
+                }
+            }
         }
         
-        await loadBalance();
-        await loadMatches();
-        await loadMyBets();
+        if (response && response.publicKey) {
+            setupWallet(provider);
+        } else {
+            throw new Error('No public key returned');
+        }
         
     } catch (err) {
         console.error('Connection error:', err);
-        
-        if (err.code === 4001) {
-            toast('Connection cancelled by user', 'er');
-        } else if (err.message?.includes('user rejected')) {
-            toast('Connection rejected', 'er');
-        } else {
-            toast('Failed to connect: ' + (err.message || 'Unknown error'), 'er');
-        }
-        
-        closeAllModals();
+        handleConnectionError(err, provider);
     }
 }
 
-// Show wallet selection modal (desktop)
-function showDesktopWalletModal() {
+// Setup wallet after successful connection
+function setupWallet(provider) {
+    const publicKey = provider.publicKey.toString();
+    
+    wallet = {
+        publicKey: publicKey,
+        provider: provider,
+        signTransaction: provider.signTransaction ? provider.signTransaction.bind(provider) : null,
+        signAllTransactions: provider.signAllTransactions ? provider.signAllTransactions.bind(provider) : null,
+        signMessage: provider.signMessage ? provider.signMessage.bind(provider) : null,
+        connection: new solanaWeb3.Connection(FIXED_RPC, 'confirmed')
+    };
+    
+    console.log('✅ Wallet connected:', publicKey);
+    updateWalletUI(publicKey);
     closeAllModals();
+    toast('Wallet connected! ✅', 'ok');
     
-    const hasPhantom = !!window.solana?.isPhantom;
-    const hasSolflare = !!window.solflare?.isSolflare;
-    const hasBackpack = !!window.backpack;
+    // Save connection state
+    localStorage.setItem('walletConnected', 'true');
     
-    const modalHtml = `
-        <div id="desktopWalletModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center; z-index: 10002; backdrop-filter: blur(8px);">
-            <div style="background: white; border-radius: 24px; padding: 32px; text-align: center; max-width: 380px; width: 90%;">
-                <div style="font-size: 48px; margin-bottom: 12px;">🔌</div>
-                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 8px; color: #1a1a2e;">Connect Wallet</h3>
-                <p style="color: #666; font-size: 13px; margin-bottom: 24px;">Choose your Solana wallet to continue</p>
-                
-                ${hasPhantom ? `
-                <button onclick="connectWallet('phantom')" style="width: 100%; background: linear-gradient(135deg, #ab9ff2, #7c6ff0); border: none; border-radius: 16px; padding: 16px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                    <span style="font-size: 24px;">🦊</span> Phantom
-                </button>
-                ` : `
-                <a href="https://phantom.app/download" target="_blank" style="display: block; width: 100%; background: #f0f0f0; border: 2px dashed #ccc; border-radius: 16px; padding: 14px; margin-bottom: 12px; color: #666; font-weight: 600; text-decoration: none; font-size: 15px; box-sizing: border-box;">
-                    📥 Install Phantom
-                </a>
-                `}
-                
-                ${hasSolflare ? `
-                <button onclick="connectWallet('solflare')" style="width: 100%; background: linear-gradient(135deg, #ff8c42, #ff6b1a); border: none; border-radius: 16px; padding: 16px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                    <span style="font-size: 24px;">☀️</span> Solflare
-                </button>
-                ` : `
-                <a href="https://solflare.com/download" target="_blank" style="display: block; width: 100%; background: #f0f0f0; border: 2px dashed #ccc; border-radius: 16px; padding: 14px; margin-bottom: 12px; color: #666; font-weight: 600; text-decoration: none; font-size: 15px; box-sizing: border-box;">
-                    📥 Install Solflare
-                </a>
-                `}
-                
-                <button onclick="closeAllModals()" style="background: none; border: 1px solid #ddd; border-radius: 12px; padding: 12px 32px; color: #666; cursor: pointer; margin-top: 8px; width: 100%;">Cancel</button>
-            </div>
-        </div>
-    `;
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    // Setup event listeners
+    setupWalletListeners(provider);
+    
+    // Load data
+    loadBalance();
+    loadMatches();
+    loadMyBets();
 }
 
-// Show mobile wallet modal
+// Setup wallet event listeners
+function setupWalletListeners(provider) {
+    // Remove old listeners first
+    try {
+        provider.off('connect');
+        provider.off('disconnect');
+        provider.off('accountChanged');
+    } catch(e) {}
+    
+    // Account changed
+    if (provider.on) {
+        provider.on('accountChanged', (publicKey) => {
+            console.log('Account changed:', publicKey?.toString());
+            if (publicKey) {
+                wallet.publicKey = publicKey.toString();
+                updateWalletUI(wallet.publicKey);
+                loadBalance();
+                loadMyBets();
+            } else {
+                disconnectWallet();
+            }
+        });
+        
+        // Disconnect
+        provider.on('disconnect', () => {
+            console.log('Wallet disconnected');
+            disconnectWallet();
+        });
+        
+        // Connect
+        provider.on('connect', (publicKey) => {
+            console.log('Wallet reconnected:', publicKey?.toString());
+            if (publicKey) {
+                wallet.publicKey = publicKey.toString();
+                updateWalletUI(wallet.publicKey);
+            }
+        });
+    }
+}
+
+// Handle connection errors
+function handleConnectionError(err, provider) {
+    let message = 'Failed to connect';
+    
+    if (err.code === 4001 || err.message?.includes('rejected')) {
+        message = 'Connection rejected by user';
+    } else if (err.message?.includes('Unexpected error')) {
+        // Common Phantom error - usually means extension needs refresh
+        if (isMobile()) {
+            message = 'Please open this page in Phantom app browser';
+        } else {
+            message = 'Please unlock Phantom extension and try again';
+        }
+    } else if (err.message) {
+        message = err.message;
+    }
+    
+    toast(message, 'er');
+    closeAllModals();
+}
+
+// Show mobile wallet options
 function showMobileWalletModal() {
     closeAllModals();
     
     const currentUrl = window.location.href;
-    const encodedUrl = encodeURIComponent(currentUrl);
     
     const modalHtml = `
         <div id="mobileWalletModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center; z-index: 10003; backdrop-filter: blur(8px);">
             <div style="background: white; border-radius: 24px; padding: 28px; text-align: center; max-width: 340px; width: 90%;">
                 <div style="font-size: 48px; margin-bottom: 12px;">📱</div>
-                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 16px;">Connect Mobile Wallet</h3>
+                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 16px; color: #1a1a2e;">Connect Wallet</h3>
                 
                 <p style="color: #666; font-size: 13px; margin-bottom: 20px; line-height: 1.5;">
-                    Choose how to connect your wallet:
+                    For the best experience, open this page directly in the <strong>Phantom app browser</strong>.
                 </p>
                 
-                <button onclick="connectWallet('phantom')" style="width: 100%; background: linear-gradient(135deg, #ab9ff2, #7c6ff0); border: none; border-radius: 16px; padding: 16px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer; font-size: 15px;">
-                    🦊 Open in Phantom
-                </button>
-                
-                <button onclick="openPhantomDeepLink()" style="width: 100%; background: linear-gradient(135deg, #8b7355, #6b5b45); border: none; border-radius: 16px; padding: 16px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer; font-size: 15px;">
-                    📲 Open Phantom App
-                </button>
-                
-                <div style="background: #f5f0e8; border-radius: 12px; padding: 12px; margin: 12px 0; text-align: left;">
-                    <p style="color: #666; font-size: 12px; margin: 0;">
-                        <strong>Tip:</strong> For best experience, open this site directly in Phantom's in-app browser.
+                <div style="background: #f5f0e8; border-radius: 12px; padding: 16px; margin-bottom: 20px; text-align: left;">
+                    <p style="font-size: 13px; color: #666; margin: 0 0 8px 0;"><strong>How to connect:</strong></p>
+                    <p style="font-size: 12px; color: #666; margin: 4px 0;">1️⃣ Open Phantom app</p>
+                    <p style="font-size: 12px; color: #666; margin: 4px 0;">2️⃣ Tap the 🌐 browser icon</p>
+                    <p style="font-size: 12px; color: #666; margin: 4px 0;">3️⃣ Go to this URL:</p>
+                    <p style="font-size: 11px; color: #8b7355; word-break: break-all; margin: 4px 0; background: rgba(139,115,85,0.1); padding: 8px; border-radius: 8px;">
+                        ${currentUrl}
                     </p>
                 </div>
+                
+                <button onclick="copyCurrentUrl()" style="width: 100%; background: #8b7355; border: none; border-radius: 14px; padding: 14px; margin-bottom: 10px; color: white; font-weight: 600; cursor: pointer; font-size: 14px;">
+                    📋 Copy URL
+                </button>
+                
+                <button onclick="openPhantomApp()" style="width: 100%; background: linear-gradient(135deg, #ab9ff2, #7c6ff0); border: none; border-radius: 14px; padding: 14px; margin-bottom: 10px; color: white; font-weight: 600; cursor: pointer; font-size: 14px;">
+                    🦊 Open Phantom App
+                </button>
                 
                 <button onclick="closeAllModals()" style="background: none; border: 1px solid #ddd; border-radius: 12px; padding: 12px 32px; color: #666; cursor: pointer; width: 100%;">Cancel</button>
             </div>
@@ -5728,41 +5742,65 @@ function showMobileWalletModal() {
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 }
 
-// Deep link to Phantom app
-function openPhantomDeepLink() {
+// Show desktop install prompt
+function showDesktopInstallPrompt() {
+    closeAllModals();
+    
+    const modalHtml = `
+        <div id="desktopWalletModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center; z-index: 10002; backdrop-filter: blur(8px);">
+            <div style="background: white; border-radius: 24px; padding: 32px; text-align: center; max-width: 380px; width: 90%;">
+                <div style="font-size: 48px; margin-bottom: 12px;">🦊</div>
+                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 8px; color: #1a1a2e;">Phantom Wallet Required</h3>
+                <p style="color: #666; font-size: 13px; margin-bottom: 24px;">
+                    You need Phantom wallet to use this app. It's free and easy to set up!
+                </p>
+                
+                <a href="https://phantom.app/download" target="_blank" style="display: block; width: 100%; background: linear-gradient(135deg, #ab9ff2, #7c6ff0); border: none; border-radius: 16px; padding: 16px; margin-bottom: 12px; color: white; font-weight: 600; text-decoration: none; font-size: 15px; box-sizing: border-box;">
+                    📥 Install Phantom Wallet
+                </a>
+                
+                <p style="color: #666; font-size: 12px; margin-bottom: 16px;">
+                    After installing, refresh this page to connect.
+                </p>
+                
+                <button onclick="closeAllModals()" style="background: none; border: 1px solid #ddd; border-radius: 12px; padding: 12px 32px; color: #666; cursor: pointer; width: 100%;">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+// Utility functions
+function copyCurrentUrl() {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+        toast('URL copied! Open Phantom app and paste it in the browser', 'ok');
+    }).catch(() => {
+        toast('Failed to copy URL', 'er');
+    });
+    closeAllModals();
+}
+
+function openPhantomApp() {
     const currentUrl = window.location.href;
     const encodedUrl = encodeURIComponent(currentUrl);
     
-    // Save state
-    sessionStorage.setItem('phantom_return', 'true');
-    
-    // Phantom universal link
-    const deepLink = `https://phantom.app/ul/browse/${encodedUrl}?ref=${encodedUrl}`;
-    
+    // Try to open Phantom app
     if (isAndroid()) {
-        // Android intent
-        window.location.href = `intent://phantom.app/ul/browse/${encodedUrl}?ref=${encodedUrl}#Intent;scheme=https;package=app.phantom;end`;
+        window.location.href = `intent://phantom.app/ul/browse/${encodedUrl}#Intent;scheme=https;package=app.phantom;end`;
     } else {
-        // iOS
-        window.location.href = deepLink;
+        window.location.href = `phantom://browse?url=${encodedUrl}`;
     }
     
-    // Show connecting toast
-    setTimeout(() => {
-        toast('Opening Phantom... Please connect your wallet', 'ok');
-    }, 500);
-    
-    // Fallback if app not installed
+    // Fallback after delay
     setTimeout(() => {
         if (document.hasFocus()) {
-            toast('Phantom not detected. Redirecting to app store...', 'er');
             if (isAndroid()) {
                 window.open('https://play.google.com/store/apps/details?id=app.phantom', '_blank');
             } else {
                 window.open('https://apps.apple.com/app/phantom-solana-wallet/1598432977', '_blank');
             }
         }
-    }, 3000);
+    }, 2500);
 }
 
 function closeAllModals() {
@@ -5774,21 +5812,26 @@ function closeAllModals() {
 }
 
 function disconnectWallet() {
-    if (wallet?.provider?.disconnect) {
-        try { wallet.provider.disconnect(); } catch(e) {}
+    if (wallet?.provider) {
+        try { 
+            wallet.provider.disconnect(); 
+        } catch(e) {
+            console.log('Disconnect error:', e);
+        }
     }
     wallet = null;
     updateWalletUI(null);
     toast('Wallet disconnected', '');
     closeAllModals();
-    localStorage.removeItem('walletType');
-    sessionStorage.removeItem('phantom_return');
+    localStorage.removeItem('walletConnected');
 }
 
 function updateWalletUI(address) {
     const wlbl = document.getElementById('wlbl');
     const wbtn = document.getElementById('wbtn');
     const bchip = document.getElementById('bchip');
+    
+    if (!wlbl || !wbtn) return;
     
     if (address) {
         wlbl.textContent = address.slice(0, 6) + '...' + address.slice(-4);
@@ -5803,7 +5846,8 @@ function updateWalletUI(address) {
 
 async function loadBalance() {
     if (!wallet?.publicKey) {
-        document.getElementById('balamt').textContent = '0';
+        const balEl = document.getElementById('balamt');
+        if (balEl) balEl.textContent = '0';
         return;
     }
     
@@ -5820,50 +5864,56 @@ async function loadBalance() {
             formatted = balance.value.uiAmount?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
         }
         
-        document.getElementById('balamt').textContent = formatted;
+        const balEl = document.getElementById('balamt');
+        if (balEl) balEl.textContent = formatted;
+        
         const heroPool = document.getElementById('fbpool-hero');
         if (heroPool) heroPool.textContent = formatted + ' MONKE';
         
         wallet.connection = connection;
     } catch (error) {
         console.error('Balance error:', error);
-        document.getElementById('balamt').textContent = '0';
+        const balEl = document.getElementById('balamt');
+        if (balEl) balEl.textContent = '0';
     }
+}
+
+function toast(message, type = '') {
+    const tz = document.getElementById('tz');
+    if (!tz) return;
+    
+    const toastDiv = document.createElement('div');
+    toastDiv.className = 'tst ' + (type === 'ok' ? 'tok' : type === 'er' ? 'ter' : '');
+    toastDiv.innerHTML = '<span class="tic">' + (type === 'ok' ? '✅' : type === 'er' ? '❌' : 'ℹ️') + '</span><span>' + message + '</span>';
+    tz.appendChild(toastDiv);
+    setTimeout(() => toastDiv.remove(), 4000);
 }
 
 // Auto-connect on page load
 window.addEventListener('load', () => {
-    console.log('🚀 Page loaded, checking wallet...');
+    console.log('🚀 Page loaded');
     
-    // Check if returning from Phantom deep link
-    const phantomReturn = sessionStorage.getItem('phantom_return');
-    if (phantomReturn === 'true') {
-        sessionStorage.removeItem('phantom_return');
-        console.log('📲 Returned from Phantom, attempting auto-connect...');
+    // Small delay to ensure Phantom has time to inject
+    setTimeout(() => {
+        const provider = getProvider();
         
-        setTimeout(async () => {
-            if (window.solana?.isPhantom) {
-                await connectWallet('phantom');
-            }
-        }, 1500);
-        return;
-    }
-    
-    // Auto-connect if wallet was previously connected
-    const savedWalletType = localStorage.getItem('walletType');
-    if (savedWalletType && window.solana?.isPhantom && window.solana?.isConnected) {
-        console.log('🔄 Auto-connecting to', savedWalletType);
-        setTimeout(() => connectWallet(savedWalletType), 500);
-    }
+        if (provider?.isConnected && provider.publicKey) {
+            console.log('🔄 Auto-connecting to already connected wallet');
+            setupWallet(provider);
+        } else if (localStorage.getItem('walletConnected') === 'true' && provider) {
+            console.log('🔄 Attempting to reconnect...');
+            connectToWallet(provider);
+        }
+    }, 500);
 });
 
 // Expose functions globally for onclick handlers
 window.openWcModal = openWcModal;
-window.connectWallet = connectWallet;
+window.connectToWallet = connectToWallet;
 window.closeAllModals = closeAllModals;
 window.disconnectWallet = disconnectWallet;
-window.openPhantomDeepLink = openPhantomDeepLink;
-
+window.copyCurrentUrl = copyCurrentUrl;
+window.openPhantomApp = openPhantomApp;
 // ═══════════════════════════════════════════════════════
 //  INTERACTIVE FOOTBALL SYSTEM - KEPT ORIGINAL (only colors changed)
 // ═══════════════════════════════════════════════════════
