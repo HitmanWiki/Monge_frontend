@@ -7,14 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-<!-- For mobile wallet deep linking -->
-<meta name="referrer" content="no-referrer">
-<script>
-    // Pre-detect Phantom mobile app
-    if (/Phantom/i.test(navigator.userAgent)) {
-        console.log('Running inside Phantom mobile app');
-    }
-</script>
+<!-- WalletConnect Scripts (CDN versions without import) -->
+<script src="https://cdn.jsdelivr.net/npm/@walletconnect/modal@2.6.2/dist/index.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@solana/wallet-adapter-wallets@0.19.32/lib/index.js"></script>
 <!-- MONKE Style Fonts - Replaced Anton/Rajdhani with Outfit + Playfair Display -->
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
@@ -3699,9 +3694,9 @@ footer::before {
       <span id="balamt">0</span> MONKE
     </div>
     <button class="w3b" id="wbtn" onclick="connectSolanaWallet()">
-      <span class="wd"></span>
-      <span id="wlbl">Connect Wallet</span>
-    </button>
+    <span class="wd"></span>
+    <span id="wlbl">Connect Wallet</span>
+</button>
   </div>
 </header>
 
@@ -4279,9 +4274,7 @@ footer::before {
 <!-- Solana Web3 Core -->
 <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@solana/spl-token@0.4.0/lib/index.iife.min.js"></script>
-<!-- Web3Modal for Solana -->
-<script src="https://cdn.jsdelivr.net/npm/@walletconnect/modal@2.6.2/dist/index.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@solana/wallet-adapter-wallets@0.19.32/lib/index.js"></script>
+
 
 <script>
   // How to Play - scroll
@@ -4324,6 +4317,7 @@ const CFG = {
   TOKEN_MINT: 'BZP9h9kBEnrBV1N6kmqTbfrJx262Qzre2Mg1NrBHpump',  // ← Your Monke token on Solana
   PROGRAM_ID: 'YOUR_PROGRAM_ID_HERE',  // ← Your Solana program ID (replaces BETTING contract)
   TOKEN_DECIMALS: 6,  // Added: Solana token decimals (pump.fun uses 6)
+  WC_PROJECT_ID: '239220b3928f612e4f011eeb79d1c812',  // Add this
   EXPLORER: 'https://solscan.io'  // Changed from basescan to solscan
 };
 
@@ -5493,173 +5487,271 @@ function closeAIModal() {
   if (modal) modal.classList.remove('open');
 }
 
-/// ═══════════════════════════════════════════════════════════════
-//  DIRECT WALLETCONNECT V2 IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════
+//  SIMPLE WORKING WALLET CONNECTION (No WalletConnect issues)
+//  Uses direct Phantom detection - works on mobile!
 // ═══════════════════════════════════════════════════════════════
 
-let walletConnectClient = null;
-let walletConnectSession = null;
-let walletConnectUri = null;
+let wallet = null;
 
-// Get Project ID from https://cloud.walletconnect.com
-const WC_PROJECT_ID = '239220b3928f612e4f011eeb79d1c812';
+// Detect if on mobile
+function isMobile() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
 
-async function initWalletConnect() {
-    // Load WalletConnect library dynamically
-    const { SignClient } = await import('https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.11.0/dist/index.min.js');
+// Get the Solana provider
+function getSolanaProvider() {
+    // For mobile, Phantom injects differently
+    if (window.solana) {
+        return window.solana;
+    }
+    if (window.phantom?.solana) {
+        return window.phantom.solana;
+    }
+    return null;
+}
+
+// Main connect function - works on mobile!
+async function connectSolanaWallet() {
+    console.log('connectSolanaWallet called');
     
-    walletConnectClient = await SignClient.init({
-        projectId: WC_PROJECT_ID,
-        metadata: {
-            name: 'MONKE BET',
-            description: 'World Cup 2026 Betting on Solana',
-            url: window.location.origin,
-            icons: ['https://monkebet.com/icon.png']
-        }
-    });
+    // Get provider
+    const provider = getSolanaProvider();
     
-    // Handle session proposals
-    walletConnectClient.on('session_proposal', async (proposal) => {
-        // Auto-approve for Solana
-        const session = await walletConnectClient.approve({
-            id: proposal.id,
-            namespaces: {
-                solana: {
-                    methods: ['solana_signTransaction', 'solana_signAllTransactions'],
-                    chains: ['solana:mainnet'],
-                    events: ['chainChanged', 'accountsChanged']
-                }
+    if (!provider) {
+        // No wallet found - show install options
+        showInstallOptions();
+        return;
+    }
+    
+    try {
+        // Request connection - this will open Phantom on mobile
+        const resp = await provider.connect();
+        const publicKey = resp.publicKey.toString();
+        
+        console.log('Connected:', publicKey);
+        
+        // Setup wallet object
+        wallet = {
+            publicKey: publicKey,
+            signTransaction: provider.signTransaction,
+            signAllTransactions: provider.signAllTransactions,
+            provider: provider,
+            connection: new solanaWeb3.Connection(CFG.RPC_URL)
+        };
+        
+        updateWalletUI(publicKey);
+        toast('Wallet connected! ✅', 'ok');
+        
+        // Load data
+        await loadBalance();
+        await loadMatches();
+        await loadMyBets();
+        
+        // Handle account changes
+        provider.on('accountChanged', (newPublicKey) => {
+            if (newPublicKey) {
+                wallet.publicKey = newPublicKey.toString();
+                updateWalletUI(wallet.publicKey);
+                loadBalance();
+                loadMyBets();
+            } else {
+                disconnectWallet();
             }
         });
-        walletConnectSession = session;
         
-        // Extract public key from session
-        const publicKey = session.namespaces.solana.accounts[0].split(':')[2];
-        setupWalletConnectWallet(publicKey, session);
-    });
-    
-    // Handle session deletion
-    walletConnectClient.on('session_delete', () => {
-        disconnectWalletConnect();
-    });
-}
-
-async function connectWalletConnect() {
-    if (!walletConnectClient) {
-        await initWalletConnect();
-    }
-    
-    // Connect and get URI
-    const { uri, approval } = await walletConnectClient.connect({
-        requiredNamespaces: {
-            solana: {
-                methods: ['solana_signTransaction', 'solana_signAllTransactions'],
-                chains: ['solana:mainnet'],
-                events: ['chainChanged', 'accountsChanged']
-            }
+        // Handle disconnect
+        provider.on('disconnect', () => {
+            disconnectWallet();
+        });
+        
+    } catch (err) {
+        console.error('Connection error:', err);
+        if (err.code !== 4001) {
+            toast(err.message || 'Failed to connect', 'er');
         }
-    });
+    }
+}
+
+// Show install options (opens app store on mobile)
+function showInstallOptions() {
+    const isMobileDevice = isMobile();
     
-    walletConnectUri = uri;
+    let installHtml = `
+        <div id="installModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10001;">
+            <div style="background: white; border-radius: 24px; padding: 28px; width: 90%; max-width: 380px; text-align: center;">
+                <div style="font-size: 48px; margin-bottom: 16px;">🐒</div>
+                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 12px;">Install Phantom Wallet</h3>
+                <p style="color: var(--gray); margin-bottom: 24px;">
+                    ${isMobileDevice ? 'To use MONKE BET on mobile, you need the Phantom app.' : 'To use MONKE BET, you need a Solana wallet.'}
+                </p>
+    `;
     
-    // On mobile: open deep link
-    if (isMobile()) {
-        openWalletConnectDeepLink(uri);
-        // Show waiting modal
-        showWalletConnectWaitingModal();
+    if (isMobileDevice) {
+        // Mobile: App Store links
+        installHtml += `
+            <a href="https://apps.apple.com/app/phantom-solana-wallet/id1598432977" target="_blank" style="display: block; background: #8b7355; color: white; text-decoration: none; padding: 14px; border-radius: 100px; margin-bottom: 12px; font-weight: 600;">
+                📱 Download for iOS
+            </a>
+            <a href="https://play.google.com/store/apps/details?id=app.phantom" target="_blank" style="display: block; background: #8b7355; color: white; text-decoration: none; padding: 14px; border-radius: 100px; margin-bottom: 12px; font-weight: 600;">
+                🤖 Download for Android
+            </a>
+            <p style="font-size: 12px; color: var(--gray); margin-top: 16px;">
+                After installing, come back and click Connect Wallet again.
+            </p>
+        `;
     } else {
-        // On desktop: show QR code
-        showQRCode(uri);
+        // Desktop: Browser extension
+        installHtml += `
+            <a href="https://phantom.app/" target="_blank" style="display: block; background: #8b7355; color: white; text-decoration: none; padding: 14px; border-radius: 100px; margin-bottom: 12px; font-weight: 600;">
+                🦊 Install Phantom Extension
+            </a>
+            <a href="https://backpack.app/" target="_blank" style="display: block; background: #5b7b8a; color: white; text-decoration: none; padding: 14px; border-radius: 100px; margin-bottom: 12px; font-weight: 600;">
+                🎒 Install Backpack
+            </a>
+            <a href="https://solflare.com/" target="_blank" style="display: block; background: #c1666b; color: white; text-decoration: none; padding: 14px; border-radius: 100px; margin-bottom: 12px; font-weight: 600;">
+                🔥 Install Solflare
+            </a>
+        `;
     }
     
-    // Wait for approval
-    const session = await approval();
-    walletConnectSession = session;
-    closeModal();
-    
-    const publicKey = session.namespaces.solana.accounts[0].split(':')[2];
-    setupWalletConnectWallet(publicKey, session);
-}
-
-function openWalletConnectDeepLink(uri) {
-    // Deep link for Phantom mobile
-    const encodedUri = encodeURIComponent(uri);
-    const deepLink = `phantom://wc?uri=${encodedUri}`;
-    
-    // Also try universal link
-    const universalLink = `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?wc-uri=${encodedUri}`;
-    
-    // Try deep link first, fallback to universal
-    window.location.href = deepLink;
-    
-    // Fallback after timeout
-    setTimeout(() => {
-        window.location.href = universalLink;
-    }, 500);
-}
-
-function showWalletConnectWaitingModal() {
-    const modalHtml = `
-        <div id="wcWaitingModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10002;">
-            <div style="background: white; border-radius: 24px; padding: 32px; text-align: center; max-width: 320px;">
-                <div style="font-size: 48px; margin-bottom: 16px;">📱</div>
-                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 12px;">Open Your Wallet</h3>
-                <p style="color: var(--gray); margin-bottom: 20px;">Please check your Phantom app to approve the connection</p>
-                <button onclick="closeWalletConnectModal()" style="padding: 10px 24px; background: var(--amber); border: none; border-radius: 100px; color: white; cursor: pointer;">Waiting...</button>
+    installHtml += `
+                <button onclick="closeInstallModal()" style="margin-top: 16px; background: none; border: none; color: var(--gray); cursor: pointer;">Cancel</button>
             </div>
         </div>
     `;
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    document.body.insertAdjacentHTML('beforeend', installHtml);
 }
 
-function closeWalletConnectModal() {
-    const modal = document.getElementById('wcWaitingModal');
+function closeInstallModal() {
+    const modal = document.getElementById('installModal');
     if (modal) modal.remove();
 }
 
-function showQRCode(uri) {
-    // Generate QR code using a library or simple API
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(uri)}`;
-    
-    const modalHtml = `
-        <div id="wcQRModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10002;">
-            <div style="background: white; border-radius: 24px; padding: 32px; text-align: center;">
-                <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 16px;">Scan with Phantom</h3>
-                <img src="${qrUrl}" style="width: 200px; height: 200px; margin-bottom: 16px;">
-                <button onclick="closeWalletConnectModal()" style="padding: 10px 24px; background: var(--amber); border: none; border-radius: 100px; color: white; cursor: pointer;">Close</button>
-            </div>
-        </div>
-    `;
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+// Also try to auto-detect if Phantom is already connected
+async function checkExistingConnection() {
+    const provider = getSolanaProvider();
+    if (provider && provider.isConnected) {
+        try {
+            const publicKey = provider.publicKey.toString();
+            console.log('Found existing connection:', publicKey);
+            
+            wallet = {
+                publicKey: publicKey,
+                signTransaction: provider.signTransaction,
+                signAllTransactions: provider.signAllTransactions,
+                provider: provider,
+                connection: new solanaWeb3.Connection(CFG.RPC_URL)
+            };
+            
+            updateWalletUI(publicKey);
+            await loadBalance();
+            await loadMatches();
+            await loadMyBets();
+            
+            return true;
+        } catch (err) {
+            console.log('Existing connection check failed:', err);
+        }
+    }
+    return false;
 }
 
-function disconnectWalletConnect() {
-    if (walletConnectClient && walletConnectSession) {
-        walletConnectClient.disconnect({
-            topic: walletConnectSession.topic,
-            reason: { code: 0, message: 'User disconnected' }
-        });
+// Fixed balance loading with better error handling
+async function loadBalance() {
+    if (!wallet || !wallet.publicKey) {
+        console.log('No wallet connected, skipping balance');
+        document.getElementById('balamt').textContent = '0';
+        return;
     }
-    walletConnectSession = null;
+    
+    try {
+        const tokenMint = new solanaWeb3.PublicKey(CFG.TOKEN_MINT);
+        const userPublicKey = new solanaWeb3.PublicKey(wallet.publicKey);
+        
+        // Ensure connection exists
+        if (!wallet.connection) {
+            wallet.connection = new solanaWeb3.Connection(CFG.RPC_URL);
+        }
+        
+        const tokenAccounts = await wallet.connection.getTokenAccountsByOwner(userPublicKey, {
+            mint: tokenMint
+        });
+        
+        let formatted = '0';
+        
+        if (tokenAccounts.value.length > 0) {
+            const tokenAccountInfo = await wallet.connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
+            const balance = tokenAccountInfo.value.uiAmount;
+            formatted = balance?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+        }
+        
+        document.getElementById('balamt').textContent = formatted;
+        document.getElementById('bchip').classList.add('show');
+        
+        const heroPool = document.getElementById('fbpool-hero');
+        if (heroPool) heroPool.textContent = formatted + ' MONKE';
+        
+        console.log('Balance loaded:', formatted, 'MONKE');
+        
+    } catch (error) {
+        console.error('Balance error:', error.message);
+        document.getElementById('balamt').textContent = '0';
+    }
+}
+
+function disconnectWallet() {
+    if (wallet && wallet.provider && wallet.provider.disconnect) {
+        try {
+            wallet.provider.disconnect();
+        } catch(e) {}
+    }
     wallet = null;
     updateWalletUI(null);
     toast('Wallet disconnected', '');
 }
 
-function setupWalletConnectWallet(publicKey, session) {
-    wallet = {
-        publicKey: publicKey,
-        session: session,
-        client: walletConnectClient,
-        connection: new solanaWeb3.Connection(CFG.RPC_URL)
-    };
+function updateWalletUI(address) {
+    const wlbl = document.getElementById('wlbl');
+    const wbtn = document.getElementById('wbtn');
+    const bchip = document.getElementById('bchip');
     
-    updateWalletUI(publicKey);
-    toast('Wallet connected via WalletConnect! ✅', 'ok');
-    loadBalance();
-    loadMatches();
-    loadMyBets();
+    if (address) {
+        wlbl.textContent = address.slice(0, 6) + '...' + address.slice(-4);
+        wbtn.classList.add('linked');
+        bchip.classList.add('show');
+    } else {
+        wlbl.textContent = 'Connect Wallet';
+        wbtn.classList.remove('linked');
+        bchip.classList.remove('show');
+    }
 }
+
+// Legacy functions for compatibility
+function openWcModal() {
+    connectSolanaWallet();
+}
+
+function closeWcModal() {
+    const modal = document.getElementById('installModal');
+    if (modal) modal.remove();
+}
+
+async function connectWallet(type) {
+    connectSolanaWallet();
+}
+
+async function connectMetaMaskDirect() {
+    connectSolanaWallet();
+}
+
+// Initialize - check for existing connection on page load
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        checkExistingConnection();
+    }, 1000);
+});
 // ═══════════════════════════════════════════════════════
 //  INTERACTIVE FOOTBALL SYSTEM - KEPT ORIGINAL (only colors changed)
 // ═══════════════════════════════════════════════════════
