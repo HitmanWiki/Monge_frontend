@@ -4268,9 +4268,10 @@ footer::before {
 
 </div><!-- .app -->
 
-<!-- Solana Web3 Libraries -->
-<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.87.6/lib/index.iife.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@solana/spl-token@0.3.9/lib/index.iife.min.js"></script>
+<!-- Solana Web3 Core -->
+<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@solana/spl-token@0.4.0/lib/index.iife.min.js"></script>
+
 
 <script>
   // How to Play - scroll
@@ -5482,145 +5483,328 @@ function closeAIModal() {
   if (modal) modal.classList.remove('open');
 }
 
-// ══════════════════════════════════════════════════════════════════
-//  WALLET CONNECTION - REPLACE with Solana version
-// ══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  SIMPLE WORKING WALLET MODAL - No React dependencies
+// ═══════════════════════════════════════════════════════════════
 
+// Supported wallets configuration
+const SUPPORTED_WALLETS = [
+    {
+        name: 'Phantom',
+        icon: 'https://phantom.app/img/logo.png',
+        getProvider: () => window.phantom?.solana,
+        downloadUrl: 'https://phantom.app/',
+        checkInstalled: () => !!window.phantom?.solana
+    },
+    {
+        name: 'Backpack',
+        icon: 'https://backpack.app/logo.png',
+        getProvider: () => window.backpack?.solana,
+        downloadUrl: 'https://backpack.app/',
+        checkInstalled: () => !!window.backpack?.solana
+    },
+    {
+        name: 'Solflare',
+        icon: 'https://solflare.com/logo.png',
+        getProvider: () => window.solflare,
+        downloadUrl: 'https://solflare.com/',
+        checkInstalled: () => !!window.solflare
+    }
+];
+
+// Main connect function
 async function connectSolanaWallet() {
-  if (!window.solana) {
-    toast('Please install Phantom wallet!', 'er');
-    window.open('https://phantom.app/', '_blank');
-    return;
-  }
-  
-  try {
-    const resp = await window.solana.connect();
-    const publicKey = resp.publicKey.toString();
+    const availableWallets = SUPPORTED_WALLETS.filter(w => w.checkInstalled());
     
-    wallet = {
-      publicKey: publicKey,
-      signTransaction: window.solana.signTransaction,
-      signAllTransactions: window.solana.signAllTransactions,
-      connection: new solanaWeb3.Connection('https://api.mainnet-beta.solana.com')
-    };
+    if (availableWallets.length === 0) {
+        showInstallWalletModal();
+        return;
+    }
     
-    updateWalletUI(publicKey);
-    toast('Wallet connected! ✅', 'ok');
-    loadBalance();
-    loadMatches();
-    loadMyBets();
+    showWalletModal(availableWallets);
+}
+
+// Show wallet selection modal
+function showWalletModal(wallets) {
+    // Remove existing modal
+    const existingModal = document.getElementById('walletModal');
+    if (existingModal) existingModal.remove();
     
-    window.solana.on('accountChanged', (newPublicKey) => {
-      if (newPublicKey) {
-        wallet.publicKey = newPublicKey.toString();
-        updateWalletUI(newPublicKey.toString());
+    const modalHtml = `
+        <div id="walletModal" style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10001;
+            backdrop-filter: blur(8px);
+        ">
+            <div style="
+                background: white;
+                border-radius: 24px;
+                padding: 28px;
+                width: 90%;
+                max-width: 380px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: var(--amber); margin: 0;">
+                        🐒 Connect Wallet
+                    </h3>
+                    <button onclick="closeWalletModal()" style="
+                        background: none;
+                        border: none;
+                        font-size: 28px;
+                        cursor: pointer;
+                        color: var(--gray);
+                    ">×</button>
+                </div>
+                <p style="color: var(--gray); margin-bottom: 20px; font-size: 14px;">
+                    Choose your Solana wallet to start betting on MONKE BET
+                </p>
+                ${wallets.map(w => `
+                    <div onclick="connectToWallet('${w.name}')" style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        padding: 14px 16px;
+                        background: rgba(0,0,0,0.02);
+                        border: 1px solid var(--bord);
+                        border-radius: 16px;
+                        margin-bottom: 12px;
+                        cursor: pointer;
+                        transition: all 0.2s;
+                    " onmouseenter="this.style.borderColor='var(--amber)'; this.style.background='rgba(139,115,85,0.05)'" 
+                       onmouseleave="this.style.borderColor='var(--bord)'; this.style.background='rgba(0,0,0,0.02)'">
+                        <div style="display: flex; align-items: center; gap: 14px;">
+                            <img src="${w.icon}" alt="${w.name}" style="width: 32px; height: 32px; border-radius: 8px;" 
+                                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2732%27 height=%2732%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 fill=%27%238b7355%27/%3E%3Ctext x=%2750%25%27 y=%2750%25%27 text-anchor=%27middle%27 dy=%27.3em%27 fill=%27white%27 font-size=%2714%27 font-family=%27Arial%27%3E${w.name[0]}%3C/text%3E%3C/svg%3E'">
+                            <span style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600; color: var(--white);">${w.name}</span>
+                        </div>
+                        <span style="color: var(--gray); font-size: 20px;">→</span>
+                    </div>
+                `).join('')}
+                <div style="margin-top: 20px; text-align: center; font-size: 12px; color: var(--gray);">
+                    New to Solana? 
+                    <a href="https://phantom.app/" target="_blank" style="color: var(--amber); text-decoration: none;">Get a Wallet</a>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function showInstallWalletModal() {
+    const existingModal = document.getElementById('walletModal');
+    if (existingModal) existingModal.remove();
+    
+    const modalHtml = `
+        <div id="walletModal" style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10001;
+            backdrop-filter: blur(8px);
+        ">
+            <div style="
+                background: white;
+                border-radius: 24px;
+                padding: 28px;
+                width: 90%;
+                max-width: 380px;
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: var(--amber); margin: 0;">
+                        🐒 Install Wallet
+                    </h3>
+                    <button onclick="closeWalletModal()" style="background: none; border: none; font-size: 28px; cursor: pointer;">×</button>
+                </div>
+                <p style="color: var(--gray); margin-bottom: 20px;">To use MONKE BET, you need a Solana wallet.</p>
+                ${SUPPORTED_WALLETS.map(w => `
+                    <a href="${w.downloadUrl}" target="_blank" style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        padding: 14px 16px;
+                        background: rgba(0,0,0,0.02);
+                        border: 1px solid var(--bord);
+                        border-radius: 16px;
+                        margin-bottom: 12px;
+                        text-decoration: none;
+                        transition: all 0.2s;
+                    " onmouseenter="this.style.borderColor='var(--amber)'" 
+                       onmouseleave="this.style.borderColor='var(--bord)'">
+                        <div style="display: flex; align-items: center; gap: 14px;">
+                            <img src="${w.icon}" style="width: 32px; height: 32px; border-radius: 8px;">
+                            <span style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600; color: var(--white);">Install ${w.name}</span>
+                        </div>
+                        <span style="color: var(--gray); font-size: 20px;">→</span>
+                    </a>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+async function connectToWallet(walletName) {
+    closeWalletModal();
+    
+    let provider;
+    switch(walletName) {
+        case 'Phantom':
+            provider = window.phantom?.solana;
+            break;
+        case 'Backpack':
+            provider = window.backpack?.solana;
+            break;
+        case 'Solflare':
+            provider = window.solflare;
+            break;
+        default:
+            provider = window.solana;
+    }
+    
+    if (!provider) {
+        toast(`${walletName} not installed. Please install it first.`, 'er');
+        return;
+    }
+    
+    try {
+        // Request connection
+        const resp = await provider.connect();
+        const publicKey = resp.publicKey.toString();
+        
+        // Setup wallet object
+        wallet = {
+            publicKey: publicKey,
+            signTransaction: provider.signTransaction,
+            signAllTransactions: provider.signAllTransactions,
+            connection: new solanaWeb3.Connection(CFG.RPC_URL),
+            provider: provider,
+            walletName: walletName
+        };
+        
+        updateWalletUI(publicKey);
+        toast(`${walletName} connected! ✅`, 'ok');
         loadBalance();
+        loadMatches();
         loadMyBets();
-      } else {
-        disconnectWallet();
-      }
-    });
+        
+        // Handle account change
+        if (provider.on) {
+            provider.on('accountChanged', (newPublicKey) => {
+                if (newPublicKey) {
+                    wallet.publicKey = newPublicKey.toString();
+                    updateWalletUI(newPublicKey.toString());
+                    loadBalance();
+                    loadMyBets();
+                } else {
+                    disconnectWallet();
+                }
+            });
+            
+            provider.on('disconnect', () => {
+                disconnectWallet();
+            });
+        }
+        
+    } catch (err) {
+        console.error('Connection error:', err);
+        toast(err.message || 'Failed to connect', 'er');
+    }
+}
+
+function closeWalletModal() {
+    const modal = document.getElementById('walletModal');
+    if (modal) modal.remove();
+}
+
+function disconnectWallet() {
+    if (wallet && wallet.provider && wallet.provider.disconnect) {
+        try { wallet.provider.disconnect(); } catch(_) {}
+    }
+    wallet = null;
+    updateWalletUI(null);
+    toast('Wallet disconnected', '');
+}
+
+function updateWalletUI(address) {
+    const wlbl = document.getElementById('wlbl');
+    const wbtn = document.getElementById('wbtn');
+    const bchip = document.getElementById('bchip');
     
-  } catch (err) {
-    console.error('Connection error:', err);
-    toast(err.message || 'Failed to connect', 'er');
-  }
-}
-
-function disconnectWallet() {
-  if (window.solana) {
-    window.solana.disconnect();
-  }
-  wallet = null;
-  updateWalletUI(null);
-  toast('Wallet disconnected', '');
-}
-
-function updateWalletUI(address) {
-  const wlbl = document.getElementById('wlbl');
-  const wbtn = document.getElementById('wbtn');
-  const bchip = document.getElementById('bchip');
-  
-  if (address) {
-    wlbl.textContent = address.slice(0, 6) + '...' + address.slice(-4);
-    wbtn.classList.add('linked');
-    bchip.classList.add('show');
-  } else {
-    wlbl.textContent = 'Connect Wallet';
-    wbtn.classList.remove('linked');
-    bchip.classList.remove('show');
-  }
-}
-
-function openWcModal() {
-  connectSolanaWallet();
-}
-
-function closeWcModal() {
-  // Not needed for Solana
-}
-
-async function connectWallet(type) {
-  connectSolanaWallet();
-}
-async function connectMetaMaskDirect() {
-  // This function is being replaced - redirect to Solana
-  connectSolanaWallet();
-}
-
-function disconnectWallet() {
-  if (window.solana) {
-    try { window.solana.disconnect(); } catch(_) {}
-  }
-  wallet = null;
-  updateWalletUI(null);
-  toast('Wallet disconnected', '');
-}
-
-function updateWalletUI(address) {
-  if (address) {
-    $('wlbl').textContent = address.slice(0, 6) + '...' + address.slice(-4);
-    $('wbtn').classList.add('linked');
-    $('bchip').classList.add('show');
-  } else {
-    $('wlbl').textContent = 'Connect Wallet';
-    $('wbtn').classList.remove('linked');
-    $('bchip').classList.remove('show');
-  }
+    if (address) {
+        wlbl.textContent = address.slice(0, 6) + '...' + address.slice(-4);
+        wbtn.classList.add('linked');
+        bchip.classList.add('show');
+    } else {
+        wlbl.textContent = 'Connect Wallet';
+        wbtn.classList.remove('linked');
+        bchip.classList.remove('show');
+    }
 }
 
 async function loadBalance() {
-  if (!wallet) return;
-  
-  try {
-    // Solana balance check
-    const tokenMint = new solanaWeb3.PublicKey(CFG.TOKEN_MINT);
-    const userPublicKey = new solanaWeb3.PublicKey(wallet.publicKey);
+    if (!wallet) return;
     
-    const tokenAccounts = await wallet.connection.getTokenAccountsByOwner(userPublicKey, {
-      mint: tokenMint
-    });
-    
-    if (tokenAccounts.value.length > 0) {
-      const tokenAccountInfo = await wallet.connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
-      const balance = tokenAccountInfo.value.uiAmount;
-      const formatted = balance?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
-      
-      document.getElementById('balamt').textContent = formatted;
-      document.getElementById('bchip').classList.add('show');
-      
-      const heroPool = document.getElementById('fbpool-hero');
-      if (heroPool) heroPool.textContent = formatted + ' MONKE';
-      
-      console.log('✅ Balance:', formatted, 'MONKE');
-    } else {
-      document.getElementById('balamt').textContent = '0';
+    try {
+        const tokenMint = new solanaWeb3.PublicKey(CFG.TOKEN_MINT);
+        const userPublicKey = new solanaWeb3.PublicKey(wallet.publicKey);
+        
+        const tokenAccounts = await wallet.connection.getTokenAccountsByOwner(userPublicKey, {
+            mint: tokenMint
+        });
+        
+        if (tokenAccounts.value.length > 0) {
+            const tokenAccountInfo = await wallet.connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
+            const balance = tokenAccountInfo.value.uiAmount;
+            const formatted = balance?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+            
+            document.getElementById('balamt').textContent = formatted;
+            document.getElementById('bchip').classList.add('show');
+            
+            const heroPool = document.getElementById('fbpool-hero');
+            if (heroPool) heroPool.textContent = formatted + ' MONKE';
+            
+            console.log('✅ Balance:', formatted, 'MONKE');
+        } else {
+            document.getElementById('balamt').textContent = '0';
+        }
+    } catch (error) {
+        console.error('Balance error:', error.message);
     }
-  } catch (error) {
-    console.error('Balance error:', error.message);
-  }
 }
 
+// Open modal function
+function openWcModal() {
+    connectSolanaWallet();
+}
+
+function closeWcModal() {
+    closeWalletModal();
+}
+
+async function connectWallet(type) {
+    connectSolanaWallet();
+}
+
+async function connectMetaMaskDirect() {
+    connectSolanaWallet();
+}
 // ═══════════════════════════════════════════════════════
 //  INTERACTIVE FOOTBALL SYSTEM - KEPT ORIGINAL (only colors changed)
 // ═══════════════════════════════════════════════════════
