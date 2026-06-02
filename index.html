@@ -5502,10 +5502,11 @@ function closeAIModal() {
   if (modal) modal.classList.remove('open');
 }
 // ══════════════════════════════════════════════════════════════════
-//  COMPLETE FIXED WALLET CONNECTION - NO ERRORS
+//  COMPLETE FIXED WALLET CONNECTION - WITH MOBILE DEEP LINK SUPPORT
 // ══════════════════════════════════════════════════════════════════
 
 let wallet = null;
+let mobileConnectionPending = false;
 
 // Fixed RPC URL
 const FIXED_RPC = 'https://mainnet.helius-rpc.com/?api-key=9e676d35-b97a-4f46-b454-a41e9b7c28be';
@@ -5520,6 +5521,20 @@ function isInsidePhantomBrowser() {
     return navigator.userAgent.toLowerCase().includes('phantom');
 }
 
+// Check for pending connection when page loads/reloads
+function checkPendingConnection() {
+    const pending = sessionStorage.getItem('pendingConnection');
+    if (pending === 'true') {
+        sessionStorage.removeItem('pendingConnection');
+        mobileConnectionPending = false;
+        
+        // Try to connect automatically after returning from Phantom
+        setTimeout(() => {
+            connectPhantomDirect();
+        }, 1000);
+    }
+}
+
 // Main connect function
 async function openWcModal() {
     if (wallet) {
@@ -5527,19 +5542,34 @@ async function openWcModal() {
         return;
     }
     
+    // Check for pending connection first
+    checkPendingConnection();
+    
     // Check if we're inside Phantom browser
     if (isInsidePhantomBrowser()) {
         await connectPhantomDirect();
     } else if (isMobile()) {
-        showMobileInstructions();
+        // On mobile, try direct connection first
+        const provider = window.solana || window.phantom?.solana;
+        if (provider) {
+            await connectPhantomDirect();
+        } else {
+            showMobileInstructions();
+        }
     } else {
         showDesktopWalletOptions();
     }
 }
 
-// Direct Phantom connection - FIXED (removed getConnection reference)
+// Direct Phantom connection - with mobile support
 async function connectPhantomDirect() {
     const provider = window.solana || window.phantom?.solana;
+    
+    // On mobile without provider, try deep link
+    if (!provider && isMobile()) {
+        openPhantomDeepLink();
+        return;
+    }
     
     if (!provider) {
         toast('Please open this page in Phantom app browser', 'er');
@@ -5547,6 +5577,28 @@ async function connectPhantomDirect() {
     }
     
     try {
+        // Check if already connected
+        if (provider.isConnected && provider.publicKey) {
+            const publicKey = provider.publicKey.toString();
+            wallet = {
+                publicKey: publicKey,
+                provider: provider,
+                signTransaction: provider.signTransaction,
+                signAllTransactions: provider.signAllTransactions,
+                connection: new solanaWeb3.Connection(FIXED_RPC, 'confirmed')
+            };
+            updateWalletUI(publicKey);
+            toast('Wallet already connected! ✅', 'ok');
+            closeAllModals();
+            mobileConnectionPending = false;
+            sessionStorage.removeItem('pendingConnection');
+            await loadBalance();
+            await loadMatches();
+            await loadMyBets();
+            return;
+        }
+        
+        // Request connection
         const resp = await provider.connect();
         const publicKey = resp.publicKey.toString();
         
@@ -5561,6 +5613,8 @@ async function connectPhantomDirect() {
         updateWalletUI(publicKey);
         toast('Wallet connected! ✅', 'ok');
         closeAllModals();
+        mobileConnectionPending = false;
+        sessionStorage.removeItem('pendingConnection');
         
         await loadBalance();
         await loadMatches();
@@ -5580,7 +5634,15 @@ async function connectPhantomDirect() {
         
     } catch (err) {
         console.error('Connection error:', err);
-        toast(err.message || 'Failed to connect', 'er');
+        mobileConnectionPending = false;
+        
+        if (err.code === 4001) {
+            toast('Connection cancelled', 'er');
+        } else if (isMobile()) {
+            openPhantomDeepLink();
+        } else {
+            toast(err.message || 'Failed to connect', 'er');
+        }
     }
 }
 
@@ -5634,11 +5696,25 @@ function copyMobileUrl() {
 function openPhantomDeepLink() {
     const currentUrl = window.location.href;
     const encodedUrl = encodeURIComponent(currentUrl);
-    const deepLink = `phantom://browser/${encodedUrl}`;
+    
+    // Set pending connection flag
+    mobileConnectionPending = true;
+    sessionStorage.setItem('pendingConnection', 'true');
+    sessionStorage.setItem('returnUrl', currentUrl);
+    
+    // Use different deep link formats for Android vs iOS
+    const isAndroid = navigator.userAgent.toLowerCase().includes('android');
+    const deepLink = isAndroid 
+        ? `intent://browser/${encodedUrl}#Intent;scheme=phantom;package=app.phantom;end;`
+        : `phantom://browser/${encodedUrl}`;
+    
     window.location.href = deepLink;
     
+    // Show waiting message
     setTimeout(() => {
-        toast('If Phantom didn\'t open, please copy the URL and paste it in Phantom app browser', '');
+        if (mobileConnectionPending) {
+            toast('Please approve connection in Phantom app', 'ok');
+        }
     }, 2000);
 }
 
@@ -5672,6 +5748,8 @@ function disconnectWallet() {
     updateWalletUI(null);
     toast('Wallet disconnected', '');
     closeAllModals();
+    mobileConnectionPending = false;
+    sessionStorage.removeItem('pendingConnection');
 }
 
 function updateWalletUI(address) {
@@ -5765,6 +5843,9 @@ function toast(message, type = '') {
 
 // Auto-connect check on page load
 window.addEventListener('load', () => {
+    // Check for pending connection from deep link return
+    checkPendingConnection();
+    
     setTimeout(async () => {
         if (isInsidePhantomBrowser()) {
             const provider = window.solana || window.phantom?.solana;
