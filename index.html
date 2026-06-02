@@ -4328,7 +4328,7 @@ const CFG = {
   API: 'https://monke-backend.vercel.app/api',  // ← Your deployed backend URL (update to Solana backend)
   NETWORK: 'solana',  // Changed from Base Mainnet to Solana
   CHAIN_NAME: 'Solana',
-  RPC_URL: 'https://api.mainnet-beta.solana.com',  // Changed to Solana RPC
+  RPC_URL: 'https://mainnet.helius-rpc.com/?api-key=9e676d35-b97a-4f46-b454-a41e9b7c28be',  // Changed to Solana RPC
   TOKEN_MINT: 'BZP9h9kBEnrBV1N6kmqTbfrJx262Qzre2Mg1NrBHpump',  // ← Your Monke token on Solana
   PROGRAM_ID: 'YOUR_PROGRAM_ID_HERE',  // ← Your Solana program ID (replaces BETTING contract)
   TOKEN_DECIMALS: 6,  // Added: Solana token decimals (pump.fun uses 6)
@@ -5502,13 +5502,13 @@ function closeAIModal() {
   if (modal) modal.classList.remove('open');
 }
 // ══════════════════════════════════════════════════════════════════
-//  FIXED WALLET CONNECTION - No RPC issues, Modal closes properly
+//  COMPLETE FIXED WALLET CONNECTION - NO ERRORS
 // ══════════════════════════════════════════════════════════════════
 
 let wallet = null;
 
-// Use Helius or public RPC with better rate limits
-const SOLANA_RPC = 'https://solana-api.projectserum.com'; // More reliable public RPC
+// Fixed RPC URL
+const FIXED_RPC = 'https://mainnet.helius-rpc.com/?api-key=9e676d35-b97a-4f46-b454-a41e9b7c28be';
 
 // Check if on mobile
 function isMobile() {
@@ -5537,13 +5537,12 @@ async function openWcModal() {
     }
 }
 
-// Direct Phantom connection (works inside Phantom browser)
+// Direct Phantom connection - FIXED (removed getConnection reference)
 async function connectPhantomDirect() {
     const provider = window.solana || window.phantom?.solana;
     
     if (!provider) {
         toast('Please open this page in Phantom app browser', 'er');
-        closeAllModals();
         return;
     }
     
@@ -5556,42 +5555,40 @@ async function connectPhantomDirect() {
             provider: provider,
             signTransaction: provider.signTransaction,
             signAllTransactions: provider.signAllTransactions,
-            connection: new solanaWeb3.Connection(SOLANA_RPC)
+            connection: new solanaWeb3.Connection(FIXED_RPC, 'confirmed')
         };
         
         updateWalletUI(publicKey);
         toast('Wallet connected! ✅', 'ok');
-        closeAllModals(); // Close modal on success
+        closeAllModals();
         
         await loadBalance();
         await loadMatches();
         await loadMyBets();
         
-        provider.on('accountChanged', (newKey) => {
-            if (newKey) {
-                wallet.publicKey = newKey.toString();
-                updateWalletUI(wallet.publicKey);
-                loadBalance();
-            } else {
-                disconnectWallet();
-            }
-        });
+        if (provider.on) {
+            provider.on('accountChanged', (newKey) => {
+                if (newKey) {
+                    wallet.publicKey = newKey.toString();
+                    updateWalletUI(wallet.publicKey);
+                    loadBalance();
+                } else {
+                    disconnectWallet();
+                }
+            });
+        }
         
     } catch (err) {
         console.error('Connection error:', err);
-        if (err.code === 4001) {
-            toast('Connection rejected', 'er');
-        } else {
-            toast(err.message || 'Failed to connect', 'er');
-        }
-        closeAllModals();
+        toast(err.message || 'Failed to connect', 'er');
     }
 }
 
 function closeAllModals() {
-    const modals = document.querySelectorAll('[id$="Modal"]');
-    modals.forEach(modal => {
-        if (modal && modal.remove) modal.remove();
+    const modals = ['mobileInstructionsModal', 'desktopWalletModal'];
+    modals.forEach(id => {
+        const modal = document.getElementById(id);
+        if (modal) modal.remove();
     });
 }
 
@@ -5604,29 +5601,45 @@ function showMobileInstructions() {
             <div style="background: white; border-radius: 24px; padding: 28px; text-align: center; max-width: 340px; width: 90%;">
                 <div style="font-size: 56px; margin-bottom: 12px;">📱</div>
                 <h3 style="font-family: 'Playfair Display', serif; margin-bottom: 12px;">Open in Phantom</h3>
-                <p style="color: var(--gray); font-size: 14px; margin-bottom: 20px;">To connect your wallet:</p>
+                <p style="color: var(--gray); font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
+                    To connect your wallet on mobile:
+                </p>
                 <div style="background: #f5f0e8; border-radius: 16px; padding: 16px; text-align: left; margin-bottom: 20px;">
-                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>1.</strong> Open <span style="color: var(--amber);">Phantom app</span></p>
-                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>2.</strong> Tap the <span style="color: var(--amber);">🌐 browser icon</span></p>
-                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>3.</strong> Enter this URL:</p>
-                    <div style="background: var(--bg); padding: 8px; border-radius: 8px; word-break: break-all; font-size: 11px; color: var(--amber);">
+                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>Step 1:</strong> Open your <span style="color: var(--amber);">Phantom app</span></p>
+                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>Step 2:</strong> Tap the <span style="color: var(--amber);">🌐 browser icon</span> at the bottom</p>
+                    <p style="color: var(--white); font-size: 13px; margin-bottom: 12px;"><strong>Step 3:</strong> Enter this URL:</p>
+                    <div style="background: var(--bg); padding: 10px; border-radius: 8px; word-break: break-all; font-size: 11px; color: var(--amber);">
                         ${window.location.href}
                     </div>
                 </div>
-                <button onclick="copyMobileUrlAndClose()" style="width: 100%; background: #8b7355; border: none; border-radius: 16px; padding: 14px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer;">
+                <button onclick="copyMobileUrl()" style="width: 100%; background: #8b7355; border: none; border-radius: 16px; padding: 14px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer;">
                     📋 Copy URL
                 </button>
-                <button onclick="closeAllModals()" style="background: none; border: none; color: var(--gray); cursor: pointer;">Cancel</button>
+                <button onclick="openPhantomDeepLink()" style="width: 100%; background: #3b82f6; border: none; border-radius: 16px; padding: 14px; margin-bottom: 12px; color: white; font-weight: 600; cursor: pointer;">
+                    🦊 Open Phantom App
+                </button>
+                <button onclick="closeAllModals()" style="background: none; border: none; color: var(--gray); cursor: pointer; margin-top: 8px;">Cancel</button>
             </div>
         </div>
     `;
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 }
 
-function copyMobileUrlAndClose() {
+function copyMobileUrl() {
     navigator.clipboard.writeText(window.location.href);
     toast('URL copied! Open Phantom app → Browser → Paste URL', 'ok');
     closeAllModals();
+}
+
+function openPhantomDeepLink() {
+    const currentUrl = window.location.href;
+    const encodedUrl = encodeURIComponent(currentUrl);
+    const deepLink = `phantom://browser/${encodedUrl}`;
+    window.location.href = deepLink;
+    
+    setTimeout(() => {
+        toast('If Phantom didn\'t open, please copy the URL and paste it in Phantom app browser', '');
+    }, 2000);
 }
 
 // Desktop wallet options
@@ -5677,29 +5690,40 @@ function updateWalletUI(address) {
     }
 }
 
-// Fixed loadBalance with better RPC
 async function loadBalance() {
+    console.log('loadBalance called, wallet:', wallet);
+    
     if (!wallet || !wallet.publicKey) {
+        console.log('No wallet or publicKey');
         document.getElementById('balamt').textContent = '0';
         return;
     }
     
     try {
+        console.log('Loading balance for:', wallet.publicKey);
+        
         const tokenMint = new solanaWeb3.PublicKey(CFG.TOKEN_MINT);
         const userPublicKey = new solanaWeb3.PublicKey(wallet.publicKey);
         
-        // Create a new connection each time to avoid stale issues
-        const connection = new solanaWeb3.Connection(SOLANA_RPC, 'confirmed');
+        const connection = new solanaWeb3.Connection(FIXED_RPC, 'confirmed');
+        
+        console.log('Fetching token accounts for mint:', CFG.TOKEN_MINT);
         
         const tokenAccounts = await connection.getTokenAccountsByOwner(userPublicKey, {
             mint: tokenMint
         });
         
+        console.log('Token accounts found:', tokenAccounts.value.length);
+        
         let formatted = '0';
         
         if (tokenAccounts.value.length > 0) {
             const tokenAccountInfo = await connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
-            formatted = tokenAccountInfo.value.uiAmount?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+            const balance = tokenAccountInfo.value.uiAmount;
+            formatted = balance?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+            console.log('Balance found:', formatted, 'MONKE');
+        } else {
+            console.log('No MONKE token account found.');
         }
         
         document.getElementById('balamt').textContent = formatted;
@@ -5708,7 +5732,6 @@ async function loadBalance() {
         const heroPool = document.getElementById('fbpool-hero');
         if (heroPool) heroPool.textContent = formatted + ' MONKE';
         
-        // Update wallet connection if needed
         if (!wallet.connection) {
             wallet.connection = connection;
         }
@@ -5752,7 +5775,7 @@ window.addEventListener('load', () => {
                     provider: provider,
                     signTransaction: provider.signTransaction,
                     signAllTransactions: provider.signAllTransactions,
-                    connection: new solanaWeb3.Connection(SOLANA_RPC)
+                    connection: new solanaWeb3.Connection(FIXED_RPC, 'confirmed')
                 };
                 updateWalletUI(publicKey);
                 await loadBalance();
@@ -5760,7 +5783,7 @@ window.addEventListener('load', () => {
         }
     }, 500);
 });
-// ══════════════════════════════════
+// ═══════════════════════════════════════════════════════
 //  INTERACTIVE FOOTBALL SYSTEM - KEPT ORIGINAL (only colors changed)
 // ═══════════════════════════════════════════════════════
 
