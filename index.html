@@ -4642,27 +4642,26 @@ function renderHighlights(filter = 'all') {
     }
   }
   
-  // 👥 YOUR RECENT BET
-  if (filter === 'all' || filter === 'active') {
-    // Find match with your bet
-    const yourBet = allMatchesRaw.find(m => {
-      const pool = parseFloat(m.pools?.total || '0');
-      return pool > 0;
+  // 👥 MOST ACTIVE - Match with highest pool
+if (filter === 'all' || filter === 'active') {
+  const active = [...allMatchesRaw]
+    .filter(m => parseFloat(m.pools?.total || '0') > 0)
+    .sort((a, b) => parseFloat(b.pools?.total || '0') - parseFloat(a.pools?.total || '0'))
+    .reverse()[0];
+  
+  if (active) {
+    cards.push({
+      type: 'most-active',
+      badge: '👥 Most Active',
+      badgeClass: 'active',
+      match: active,
+      icon: '👥',
+      stat: `${parseFloat(active.pools?.total || 0).toFixed(0)} MONKE`,
+      label: 'Highest Pool',
+      color: 'var(--amber)'
     });
-    
-    if (yourBet) {
-      cards.push({
-        type: 'most-active',
-        badge: '🎯 Your Bet',
-        badgeClass: 'active',
-        match: yourBet,
-        icon: '🎯',
-        stat: `${parseFloat(yourBet.pools?.total || 0).toFixed(0)} MONKE`,
-        label: 'Total Pool',
-        color: 'var(--amber)'
-      });
-    }
   }
+}
   
   if (cards.length === 0) {
     grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--gray);">
