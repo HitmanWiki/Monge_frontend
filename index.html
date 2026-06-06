@@ -6494,10 +6494,10 @@ async function placeBet(matchId) {
   if (!match) return toast('Match not found', 'er');
   
   try {
-    toast('⏳ Preparing transaction...', '');
+    toast('⏳ Sending tokens to escrow...', '');
     
     const connection = new solanaWeb3.Connection(CFG.RPC_URL, 'confirmed');
-    const { PublicKey, Transaction, TransactionInstruction, SystemProgram, SYSVAR_RENT_PUBKEY } = solanaWeb3;
+    const { PublicKey, Transaction, TransactionInstruction } = solanaWeb3;
     
     const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
@@ -6506,63 +6506,40 @@ async function placeBet(matchId) {
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
     const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
-    // Helper: Get ATA address
-    function getATA(mint, owner) {
-      const [ata] = PublicKey.findProgramAddressSync(
-        [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-      return ata;
-    }
-    
-    // Helper: Create transfer instruction
-    function createTransferIx(source, destination, owner, amount) {
-      const keys = [
-        { pubkey: source, isSigner: false, isWritable: true },
-        { pubkey: destination, isSigner: false, isWritable: true },
-        { pubkey: owner, isSigner: true, isWritable: false },
-      ];
-      const data = new Uint8Array(9);
-      data[0] = 3;
-      const big = BigInt(amount);
-      for (let i = 0; i < 8; i++) data[i + 1] = Number((big >> BigInt(i * 8)) & BigInt(0xFFn));
-      return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
-    }
-    
-    // Get token accounts
-    const userATA = getATA(tokenMint, userKey);
-    const escrowATA = getATA(tokenMint, escrowKey);
-    
-    // Check if user ATA exists
-    const userATAInfo = await connection.getAccountInfo(userATA);
-    
-    const tx = new Transaction();
-    
-    // Create user ATA if needed (user creates their own)
-    if (!userATAInfo) {
-      console.log('Creating user token account...');
-      const createATAKeys = [
-        { pubkey: userKey, isSigner: true, isWritable: true },
-        { pubkey: userATA, isSigner: false, isWritable: true },
-        { pubkey: userKey, isSigner: false, isWritable: false },
-        { pubkey: tokenMint, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
-      ];
-      tx.add(new TransactionInstruction({
-        keys: createATAKeys,
-        programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-        data: new Uint8Array(0)
-      }));
-    }
+    // Get ATAs
+    const [userATA] = PublicKey.findProgramAddressSync(
+      [userKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const [escrowATA] = PublicKey.findProgramAddressSync(
+      [escrowKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
     
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
     
-    // Add transfer instruction (escrow ATA should already exist)
-    tx.add(createTransferIx(userATA, escrowATA, userKey, amountRaw));
+    // Build transfer instruction
+    const keys = [
+      { pubkey: userATA, isSigner: false, isWritable: true },
+      { pubkey: escrowATA, isSigner: false, isWritable: true },
+      { pubkey: userKey, isSigner: true, isWritable: false },
+    ];
     
+    const data = new Uint8Array(9);
+    data[0] = 3; // Transfer instruction
+    const big = BigInt(amountRaw);
+    for (let i = 0; i < 8; i++) {
+      data[i + 1] = Number((big >> BigInt(i * 8)) & BigInt(0xFFn));
+    }
+    
+    const transferIx = new TransactionInstruction({
+      keys,
+      programId: TOKEN_PROGRAM_ID,
+      data
+    });
+    
+    const tx = new Transaction().add(transferIx);
     const { blockhash } = await connection.getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.feePayer = userKey;
@@ -6575,7 +6552,6 @@ async function placeBet(matchId) {
     
     console.log('✅ Bet placed:', signature);
     
-    // Save to backend
     await fetch(CFG.API + '/bets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
