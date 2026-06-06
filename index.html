@@ -6506,7 +6506,7 @@ async function placeBet(matchId) {
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
     const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
-    // Helper functions
+    // Helper: Get ATA address
     function getATA(mint, owner) {
       const [ata] = PublicKey.findProgramAddressSync(
         [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
@@ -6515,6 +6515,7 @@ async function placeBet(matchId) {
       return ata;
     }
     
+    // Helper: Create transfer instruction
     function createTransferIx(source, destination, owner, amount) {
       const keys = [
         { pubkey: source, isSigner: false, isWritable: true },
@@ -6528,45 +6529,38 @@ async function placeBet(matchId) {
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
     
-    function createATAIx(payer, ata, owner, mint) {
-      const keys = [
-        { pubkey: payer, isSigner: true, isWritable: true },
-        { pubkey: ata, isSigner: false, isWritable: true },
-        { pubkey: owner, isSigner: false, isWritable: false },
-        { pubkey: mint, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
-      ];
-      return new TransactionInstruction({ keys, programId: ASSOCIATED_TOKEN_PROGRAM_ID, data: new Uint8Array(0) });
-    }
-    
     // Get token accounts
     const userATA = getATA(tokenMint, userKey);
     const escrowATA = getATA(tokenMint, escrowKey);
     
-    // Check if accounts exist
+    // Check if user ATA exists
     const userATAInfo = await connection.getAccountInfo(userATA);
-    const escrowATAInfo = await connection.getAccountInfo(escrowATA);
     
     const tx = new Transaction();
     
-    // Create user ATA if needed
+    // Create user ATA if needed (user creates their own)
     if (!userATAInfo) {
       console.log('Creating user token account...');
-      tx.add(createATAIx(userKey, userATA, userKey, tokenMint));
-    }
-    
-    // Create escrow ATA if needed
-    if (!escrowATAInfo) {
-      console.log('Creating escrow token account...');
-      tx.add(createATAIx(userKey, escrowATA, escrowKey, tokenMint));
+      const createATAKeys = [
+        { pubkey: userKey, isSigner: true, isWritable: true },
+        { pubkey: userATA, isSigner: false, isWritable: true },
+        { pubkey: userKey, isSigner: false, isWritable: false },
+        { pubkey: tokenMint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      ];
+      tx.add(new TransactionInstruction({
+        keys: createATAKeys,
+        programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+        data: new Uint8Array(0)
+      }));
     }
     
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
     
-    // Add transfer instruction
+    // Add transfer instruction (escrow ATA should already exist)
     tx.add(createTransferIx(userATA, escrowATA, userKey, amountRaw));
     
     const { blockhash } = await connection.getLatestBlockhash();
@@ -6610,7 +6604,6 @@ async function placeBet(matchId) {
     }
   }
 }
-
 // ══════════════════════════════════════════════════════════════════
 //  ULTIMATE BET FUNCTIONS
 // ══════════════════════════════════════════════════════════════════
