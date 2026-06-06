@@ -6500,21 +6500,30 @@ async function placeBet(matchId) {
     const { PublicKey, Transaction, TransactionInstruction } = solanaWeb3;
     
     const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
     
     const userKey = new PublicKey(wallet.publicKey);
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
     const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
-    // Get ATAs
-    const [userATA] = PublicKey.findProgramAddressSync(
-      [userKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
+    // 🔥 Find the REAL user token account by querying the blockchain
+    const userTokenAccounts = await connection.getTokenAccountsByOwner(userKey, {
+      mint: tokenMint
+    });
+    
+    if (userTokenAccounts.value.length === 0) {
+      return toast('❌ No MONKE token account found. Add MONKE token to your wallet first.', 'er');
+    }
+    
+    const userATA = userTokenAccounts.value[0].pubkey;
+    console.log('✅ User ATA:', userATA.toString());
+    
+    // Get escrow ATA
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
     const [escrowATA] = PublicKey.findProgramAddressSync(
       [escrowKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
+    console.log('Escrow ATA:', escrowATA.toString());
     
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
@@ -6527,7 +6536,7 @@ async function placeBet(matchId) {
     ];
     
     const data = new Uint8Array(9);
-    data[0] = 3; // Transfer instruction
+    data[0] = 3;
     const big = BigInt(amountRaw);
     for (let i = 0; i < 8; i++) {
       data[i + 1] = Number((big >> BigInt(i * 8)) & BigInt(0xFFn));
