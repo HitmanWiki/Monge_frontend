@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MONKE BET — Admin Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a1a; color: white; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+  .container { max-width: 1000px; margin: 0 auto; }
+  h1 { color: #8b7355; margin-bottom: 20px; font-size: 28px; }
+  .card { background: #1a1a2e; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .card h3 { color: #8b7355; margin-bottom: 15px; }
+  label { display: block; color: #888; font-size: 12px; margin-bottom: 4px; }
+  input, select { width: 100%; padding: 10px; background: #0a0a1a; color: white; border: 1px solid #333; border-radius: 8px; margin-bottom: 10px; font-size: 14px; }
+  button { padding: 12px 24px; background: #8b7355; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  button:hover { background: #6b5b45; }
+  button.danger { background: #c1666b; }
+  button.success { background: #2e7d64; }
+  .flex { display: flex; gap: 10px; }
+  .flex > * { flex: 1; }
+  .status { padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 13px; }
+  .status.ok { background: rgba(46,125,100,0.2); color: #2e7d64; }
+  .status.err { background: rgba(193,102,107,0.2); color: #c1666b; }
+  .match-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #333; }
+  .match-row:last-child { border-bottom: none; }
+  .badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge.open { background: rgba(46,125,100,0.2); color: #2e7d64; }
+  .badge.live { background: rgba(193,102,107,0.2); color: #c1666b; animation: pulse 1.5s infinite; }
+  .badge.finished { background: rgba(139,115,85,0.2); color: #8b7355; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  .search-box { margin-bottom: 15px; }
+  #walletAddress { font-family: monospace; font-size: 12px; color: #8b7355; }
+  .tab { padding: 10px 20px; background: transparent; border: 1px solid #333; border-radius: 8px 8px 0 0; cursor: pointer; margin-right: 5px; }
+  .tab.active { background: #1a1a2e; border-bottom: 2px solid #8b7355; }
+  .tabs { margin-bottom: -1px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🐒 MONKE BET — Admin Dashboard</h1>
+  
+  <!-- Wallet Connect -->
+  <div class="card">
+    <h3>🔐 Admin Authentication</h3>
+    <button id="connectBtn" onclick="connectAdmin()">Connect Admin Wallet</button>
+    <div id="walletAddress" style="margin-top:10px;"></div>
+    <div id="authStatus" class="status"></div>
+  </div>
+
+  <!-- Main Content (hidden until authenticated) -->
+  <div id="mainContent" style="display:none;">
+    
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('results')">📊 Match Results</button>
+      <button class="tab" onclick="switchTab('teams')">⚽ Edit Teams</button>
+      <button class="tab" onclick="switchTab('allmatches')">📋 All Matches</button>
+    </div>
+
+    <!-- Match Results Tab -->
+    <div class="card" id="tab-results">
+      <h3>📊 Update Match Results</h3>
+      <div class="search-box">
+        <input type="text" id="matchSearch" placeholder="🔍 Search match..." oninput="filterMatches()">
+      </div>
+      <div id="matchList" style="max-height: 500px; overflow-y: auto;"></div>
+    </div>
+
+    <!-- Edit Teams Tab -->
+    <div class="card" id="tab-teams" style="display:none;">
+      <h3>⚽ Edit Team Names</h3>
+      <p style="color:#888;font-size:12px;margin-bottom:15px;">Update team names as tournament progresses (e.g., "2A" → actual team)</p>
+      <div class="flex">
+        <div>
+          <label>Match ID</label>
+          <input type="number" id="editMatchId" placeholder="Match ID">
+        </div>
+        <div>
+          <label>Home Team</label>
+          <input type="text" id="editHomeTeam" placeholder="Home Team">
+        </div>
+        <div>
+          <label>Away Team</label>
+          <input type="text" id="editAwayTeam" placeholder="Away Team">
+        </div>
+      </div>
+      <button onclick="updateTeamNames()" class="success">💾 Update Teams</button>
+      <div id="teamStatus" class="status"></div>
+    </div>
+
+    <!-- All Matches Tab -->
+    <div class="card" id="tab-allmatches" style="display:none;">
+      <h3>📋 All 104 Matches</h3>
+      <div id="allMatchesList" style="max-height: 600px; overflow-y: auto;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════
+const CFG = {
+  API: 'https://monke-dapp-8dd1198c4bce.herokuapp.com/api',
+  RPC_URL: 'https://mainnet.helius-rpc.com/?api-key=9e676d35-b97a-4f46-b454-a41e9b7c28be',
+  ADMIN_WALLETS: ['5cVWDSpcF6WWo6jLNwVmczNtCjWer5BiWp1VgRjzQhdY'], // Authorized wallets
+};
+
+let wallet = null;
+let allMatches = [];
+
+// ═══════════════════════════════════════════════════
+//  WALLET AUTH
+// ═══════════════════════════════════════════════════
+async function connectAdmin() {
+  if (!window.solana || !window.solana.isPhantom) {
+    alert('Please install Phantom wallet');
+    return;
+  }
+  
+  try {
+    const resp = await window.solana.connect();
+    wallet = { publicKey: resp.publicKey.toString() };
+    
+    document.getElementById('walletAddress').textContent = 'Connected: ' + wallet.publicKey;
+    
+    // Check if authorized
+    if (CFG.ADMIN_WALLETS.includes(wallet.publicKey)) {
+      document.getElementById('authStatus').className = 'status ok';
+      document.getElementById('authStatus').textContent = '✅ Authorized Admin Access';
+      document.getElementById('mainContent').style.display = 'block';
+      document.getElementById('connectBtn').textContent = '✅ Connected';
+      loadAllMatches();
+    } else {
+      document.getElementById('authStatus').className = 'status err';
+      document.getElementById('authStatus').textContent = '❌ Unauthorized wallet! Admin only.';
+      window.solana.disconnect();
+      wallet = null;
+    }
+  } catch(e) {
+    document.getElementById('authStatus').className = 'status err';
+    document.getElementById('authStatus').textContent = '❌ Connection failed: ' + e.message;
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  LOAD MATCHES
+// ═══════════════════════════════════════════════════
+async function loadAllMatches() {
+  try {
+    const res = await fetch(CFG.API + '/matches');
+    const data = await res.json();
+    allMatches = data.matches || [];
+    renderMatchList(allMatches);
+    renderAllMatches();
+    document.getElementById('authStatus').textContent = `✅ Loaded ${allMatches.length} matches`;
+  } catch(e) {
+    console.error('Load error:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER MATCH LIST (Results Tab)
+// ═══════════════════════════════════════════════════
+function renderMatchList(matches) {
+  const container = document.getElementById('matchList');
+  
+  container.innerHTML = matches.map(m => `
+    <div class="match-row">
+      <div style="flex:1;">
+        <strong>#${m.id}</strong> 
+        <span class="badge ${m.status === 'SCHEDULED' ? 'open' : m.status === 'IN_PLAY' ? 'live' : 'finished'}">${m.status}</span>
+        <br>
+        ${m.homeTeam} vs ${m.awayTeam}<br>
+        <small style="color:#888;">${new Date(m.startTime * 1000).toLocaleDateString()}</small>
+        ${m.score ? `<br><small style="color:#8b7355;">Current: ${m.score}</small>` : ''}
+      </div>
+      <div style="text-align:right;">
+        <div class="flex" style="margin-bottom:5px;">
+          <input type="number" id="home-${m.id}" placeholder="Home" value="${m.homeScore || ''}" style="width:60px;text-align:center;">
+          <span style="line-height:40px;">-</span>
+          <input type="number" id="away-${m.id}" placeholder="Away" value="${m.awayScore || ''}" style="width:60px;text-align:center;">
+        </div>
+        <select id="status-${m.id}" style="width:100%;margin-bottom:5px;">
+          <option value="FINISHED" ${m.status === 'FINISHED' ? 'selected' : ''}>Finished</option>
+          <option value="IN_PLAY" ${m.status === 'IN_PLAY' ? 'selected' : ''}>Live</option>
+          <option value="SCHEDULED" ${m.status === 'SCHEDULED' ? 'selected' : ''}>Scheduled</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+        <button onclick="submitResult(${m.id})" class="success" style="width:100%;">Update</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════
+//  SUBMIT RESULT
+// ═══════════════════════════════════════════════════
+async function submitResult(matchId) {
+  const homeScore = document.getElementById('home-' + matchId).value;
+  const awayScore = document.getElementById('away-' + matchId).value;
+  const status = document.getElementById('status-' + matchId).value;
+  
+  if (homeScore === '' || awayScore === '') {
+    alert('Please enter both scores');
+    return;
+  }
+  
+  try {
+    const res = await fetch(CFG.API + '/matches/' + matchId + '/result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        homeScore: parseInt(homeScore),
+        awayScore: parseInt(awayScore),
+        status: status
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (data.success) {
+      alert('✅ Result updated! Payouts will process automatically.');
+      loadAllMatches();
+    } else {
+      alert('❌ ' + (data.error || 'Failed'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  UPDATE TEAM NAMES
+// ═══════════════════════════════════════════════════
+async function updateTeamNames() {
+  const matchId = document.getElementById('editMatchId').value;
+  const homeTeam = document.getElementById('editHomeTeam').value;
+  const awayTeam = document.getElementById('editAwayTeam').value;
+  
+  if (!matchId || !homeTeam || !awayTeam) {
+    document.getElementById('teamStatus').className = 'status err';
+    document.getElementById('teamStatus').textContent = '❌ Please fill all fields';
+    return;
+  }
+  
+  try {
+    const res = await fetch(CFG.API + '/matches/' + matchId + '/teams', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ homeTeam, awayTeam })
+    });
+    
+    const data = await res.json();
+    
+    if (data.success) {
+      document.getElementById('teamStatus').className = 'status ok';
+      document.getElementById('teamStatus').textContent = '✅ Teams updated!';
+      loadAllMatches();
+    } else {
+      document.getElementById('teamStatus').className = 'status err';
+      document.getElementById('teamStatus').textContent = '❌ ' + (data.error || 'Failed');
+    }
+  } catch(e) {
+    document.getElementById('teamStatus').className = 'status err';
+    document.getElementById('teamStatus').textContent = '❌ Error: ' + e.message;
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER ALL MATCHES
+// ═══════════════════════════════════════════════════
+function renderAllMatches() {
+  const container = document.getElementById('allMatchesList');
+  
+  container.innerHTML = allMatches.map(m => `
+    <div class="match-row">
+      <div style="flex:1;">
+        <strong>#${m.id}</strong> ${m.homeTeam} vs ${m.awayTeam}
+        <br><small style="color:#888;">${m.round || 'Group Stage'} · ${new Date(m.startTime * 1000).toLocaleDateString()}</small>
+      </div>
+      <div>
+        <span class="badge ${m.status === 'SCHEDULED' ? 'open' : m.status === 'IN_PLAY' ? 'live' : 'finished'}">${m.status}</span>
+        ${m.score ? ` <strong>${m.score}</strong>` : ''}
+        ${m.winner ? ` · ${m.winner}` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════
+function filterMatches() {
+  const search = document.getElementById('matchSearch').value.toLowerCase();
+  const filtered = allMatches.filter(m => 
+    m.homeTeam.toLowerCase().includes(search) || 
+    m.awayTeam.toLowerCase().includes(search) ||
+    String(m.id).includes(search)
+  );
+  renderMatchList(filtered);
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
+  document.getElementById('tab-' + tab).style.display = 'block';
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
