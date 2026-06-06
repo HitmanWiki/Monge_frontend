@@ -5789,37 +5789,58 @@ async function loadBalance() {
     try {
         const tokenMint = new solanaWeb3.PublicKey(CFG.TOKEN_MINT);
         const userPublicKey = new solanaWeb3.PublicKey(wallet.publicKey);
-        const connection = new solanaWeb3.Connection(FIXED_RPC, 'confirmed');
-        
-        const tokenAccounts = await connection.getTokenAccountsByOwner(userPublicKey, { mint: tokenMint });
+        const connection = new solanaWeb3.Connection(CFG.RPC_URL, 'confirmed');
         
         let formatted = '0';
-        if (tokenAccounts.value.length > 0) {
-            const balance = await connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
-            formatted = balance.value.uiAmount?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+        
+        // 🔥 Try to get token account - handle gracefully if not found
+        try {
+            const tokenAccounts = await connection.getTokenAccountsByOwner(userPublicKey, { mint: tokenMint });
+            
+            if (tokenAccounts.value.length > 0) {
+                const balance = await connection.getTokenAccountBalance(tokenAccounts.value[0].pubkey);
+                formatted = balance.value.uiAmount?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || '0';
+            } else {
+                // No token account - user doesn't have this token yet
+                console.log('ℹ️ No MONKE token account found for this wallet');
+                formatted = '0';
+            }
+        } catch (tokenError) {
+            // Token mint not found or account doesn't exist
+            console.log('ℹ️ Token account lookup failed - showing 0 balance:', tokenError.message);
+            formatted = '0';
         }
         
+        // Update balance display
         const balEl = document.getElementById('balamt');
         if (balEl) balEl.textContent = formatted;
         
+        const bchip = document.getElementById('bchip');
+        if (bchip) bchip.classList.add('show');
+        
+        // 🔥 Update hero pool - show total platform volume
         const heroPool = document.getElementById('fbpool-hero');
-if (heroPool) {
-  // Show your balance in a different way or fetch total pool
-  try {
-    const statsRes = await fetch(CFG.API + '/stats');
-    const statsData = await statsRes.json();
-    const totalVolume = parseFloat(statsData.totalVolumeMONKE || 0).toLocaleString();
-    heroPool.textContent = totalVolume + ' MONKE';
-  } catch(e) {
-    heroPool.textContent = '0 MONKE';
-  }
-}
+        if (heroPool) {
+            try {
+                const statsRes = await fetch(CFG.API + '/stats');
+                const statsData = await statsRes.json();
+                const totalVolume = parseFloat(statsData.totalVolumeMONKE || 0).toLocaleString();
+                heroPool.textContent = totalVolume + ' MONKE';
+            } catch(e) {
+                heroPool.textContent = '0 MONKE';
+            }
+        }
         
         wallet.connection = connection;
+        
     } catch (error) {
-        console.error('Balance error:', error);
+        // 🔥 Handle any error gracefully
+        console.error('Balance error:', error.message);
         const balEl = document.getElementById('balamt');
         if (balEl) balEl.textContent = '0';
+        
+        const bchip = document.getElementById('bchip');
+        if (bchip) bchip.classList.add('show');
     }
 }
 
@@ -5839,22 +5860,22 @@ window.addEventListener('load', () => {
     console.log('🚀 Page loaded');
     
     // Check if returning from Phantom deep link
-    checkPhantomReturn();
+    if (typeof checkPhantomReturn === 'function') checkPhantomReturn();
     
     // Auto-connect if already connected
     setTimeout(() => {
-        const provider = getProvider();
+        const provider = typeof getProvider === 'function' ? getProvider() : null;
         if (provider?.isConnected && provider.publicKey) {
             console.log('🔄 Auto-connecting...');
-            setupWallet(provider);
+            if (typeof setupWallet === 'function') setupWallet(provider);
         }
     }, 1000);
 });
 
 // Expose functions globally
-window.openWcModal = openWcModal;
-window.closeAllModals = closeAllModals;
-window.disconnectWallet = disconnectWallet;
+window.openWcModal = typeof openWcModal !== 'undefined' ? openWcModal : function() { toast('Wallet connect loading...', ''); };
+window.closeAllModals = typeof closeAllModals !== 'undefined' ? closeAllModals : function() {};
+window.disconnectWallet = typeof disconnectWallet !== 'undefined' ? disconnectWallet : function() {};
 // ═══════════════════════════════════════════════════════
 //  INTERACTIVE FOOTBALL SYSTEM - KEPT ORIGINAL (only colors changed)
 // ═══════════════════════════════════════════════════════
