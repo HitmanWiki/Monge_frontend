@@ -1,5 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -8,15 +6,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@latest/lib/index.iife.min.js"></script>
-<!-- Solana Web3.js -->
 <script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
-<!-- Solana Wallet Adapter -->
 <script src="https://unpkg.com/@solana/wallet-adapter-base@0.9.23/lib/index.iife.min.js"></script>
 <script src="https://unpkg.com/@solana/wallet-adapter-phantom@0.9.24/lib/index.iife.min.js"></script>
 <script src="https://unpkg.com/@solana/wallet-adapter-solflare@0.6.28/lib/index.iife.min.js"></script>
 <script src="https://unpkg.com/@solana/wallet-adapter-wallets@0.19.32/lib/index.iife.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bn.js@5.2.1/lib/bn.min.js"></script>
-<!-- MONKE Style Fonts - Replaced Anton/Rajdhani with Outfit + Playfair Display -->
+
+<!-- 🔥 ADD THIS LINE -->
+<script src="https://cdn.jsdelivr.net/npm/@solana/spl-token@0.3.11/lib/index.iife.min.js"></script>
+
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
 /* ══════════════════════════════════════════════════════════════
@@ -6498,36 +6497,66 @@ async function placeBet(matchId) {
     toast('⏳ Sending tokens to escrow...', '');
     
     const connection = new solanaWeb3.Connection(CFG.RPC_URL, 'confirmed');
-    const { PublicKey, Transaction, sendAndConfirmTransaction } = solanaWeb3;
-    const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createTransferInstruction } = splToken;
+    const { PublicKey, Transaction, TransactionInstruction } = solanaWeb3;
+    
+    // Constants - no library needed
+    const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
     
     const userKey = new PublicKey(wallet.publicKey);
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
     const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
+    // Helper: Get Associated Token Address
+    function getATA(mint, owner) {
+      const [ata] = PublicKey.findProgramAddressSync(
+        [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      return ata;
+    }
+    
+    // Helper: Create Transfer Instruction
+    function createTransferIx(source, destination, owner, amount) {
+      const keys = [
+        { pubkey: source, isSigner: false, isWritable: true },
+        { pubkey: destination, isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: true, isWritable: false },
+      ];
+      
+      // Transfer instruction data: instruction index (1 byte) + amount (8 bytes)
+      const data = new Uint8Array(9);
+      data[0] = 3; // Transfer instruction = 3
+      const bigAmount = BigInt(amount);
+      for (let i = 0; i < 8; i++) {
+        data[i + 1] = Number((bigAmount >> BigInt(i * 8)) & BigInt(0xFFn));
+      }
+      
+      return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
+    }
+    
     // Get token accounts
-    const userATA = await getAssociatedTokenAddress(tokenMint, userKey);
-    const escrowATA = await getAssociatedTokenAddress(tokenMint, escrowKey);
+    const userATA = getATA(tokenMint, userKey);
+    const escrowATA = getATA(tokenMint, escrowKey);
     
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
     
-    // Simple transfer to escrow
-    const transferIx = createTransferInstruction(
-      userATA,
-      escrowATA,
-      userKey,
-      amountRaw
-    );
+    // Create transfer instruction
+    const transferIx = createTransferIx(userATA, escrowATA, userKey, amountRaw);
     
+    // Build transaction
     const tx = new Transaction().add(transferIx);
     const { blockhash } = await connection.getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.feePayer = userKey;
     
+    // Sign and send
     const signedTx = await wallet.provider.signTransaction(tx);
     const signature = await connection.sendRawTransaction(signedTx.serialize());
     await connection.confirmTransaction(signature, 'confirmed');
+    
+    console.log('✅ Bet placed:', signature);
     
     // Save bet to backend
     await fetch(CFG.API + '/bets', {
@@ -6551,7 +6580,7 @@ async function placeBet(matchId) {
     
   } catch (error) {
     console.error('Bet error:', error);
-    if (error.message?.includes('rejected')) {
+    if (error.message?.includes('rejected') || error.message?.includes('User rejected')) {
       toast('Transaction rejected', 'er');
     } else {
       toast('Failed: ' + error.message, 'er');
