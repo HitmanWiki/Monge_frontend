@@ -6494,12 +6494,11 @@ async function placeBet(matchId) {
   if (!match) return toast('Match not found', 'er');
   
   try {
-    toast('⏳ Sending tokens to escrow...', '');
+    toast('⏳ Preparing transaction...', '');
     
     const connection = new solanaWeb3.Connection(CFG.RPC_URL, 'confirmed');
-    const { PublicKey, Transaction, TransactionInstruction } = solanaWeb3;
+    const { PublicKey, Transaction, TransactionInstruction, SystemProgram, SYSVAR_RENT_PUBKEY } = solanaWeb3;
     
-    // Constants - no library needed
     const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
     
@@ -6507,7 +6506,7 @@ async function placeBet(matchId) {
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
     const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
-    // Helper: Get Associated Token Address
+    // Helper functions
     function getATA(mint, owner) {
       const [ata] = PublicKey.findProgramAddressSync(
         [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
@@ -6516,49 +6515,73 @@ async function placeBet(matchId) {
       return ata;
     }
     
-    // Helper: Create Transfer Instruction
     function createTransferIx(source, destination, owner, amount) {
       const keys = [
         { pubkey: source, isSigner: false, isWritable: true },
         { pubkey: destination, isSigner: false, isWritable: true },
         { pubkey: owner, isSigner: true, isWritable: false },
       ];
-      
-      // Transfer instruction data: instruction index (1 byte) + amount (8 bytes)
       const data = new Uint8Array(9);
-      data[0] = 3; // Transfer instruction = 3
-      const bigAmount = BigInt(amount);
-      for (let i = 0; i < 8; i++) {
-        data[i + 1] = Number((bigAmount >> BigInt(i * 8)) & BigInt(0xFFn));
-      }
-      
+      data[0] = 3;
+      const big = BigInt(amount);
+      for (let i = 0; i < 8; i++) data[i + 1] = Number((big >> BigInt(i * 8)) & BigInt(0xFFn));
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
+    }
+    
+    function createATAIx(payer, ata, owner, mint) {
+      const keys = [
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: ata, isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+      ];
+      return new TransactionInstruction({ keys, programId: ASSOCIATED_TOKEN_PROGRAM_ID, data: new Uint8Array(0) });
     }
     
     // Get token accounts
     const userATA = getATA(tokenMint, userKey);
     const escrowATA = getATA(tokenMint, escrowKey);
     
+    // Check if accounts exist
+    const userATAInfo = await connection.getAccountInfo(userATA);
+    const escrowATAInfo = await connection.getAccountInfo(escrowATA);
+    
+    const tx = new Transaction();
+    
+    // Create user ATA if needed
+    if (!userATAInfo) {
+      console.log('Creating user token account...');
+      tx.add(createATAIx(userKey, userATA, userKey, tokenMint));
+    }
+    
+    // Create escrow ATA if needed
+    if (!escrowATAInfo) {
+      console.log('Creating escrow token account...');
+      tx.add(createATAIx(userKey, escrowATA, escrowKey, tokenMint));
+    }
+    
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
     
-    // Create transfer instruction
-    const transferIx = createTransferIx(userATA, escrowATA, userKey, amountRaw);
+    // Add transfer instruction
+    tx.add(createTransferIx(userATA, escrowATA, userKey, amountRaw));
     
-    // Build transaction
-    const tx = new Transaction().add(transferIx);
     const { blockhash } = await connection.getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.feePayer = userKey;
     
-    // Sign and send
+    toast('⏳ Please approve in Phantom...', '');
+    
     const signedTx = await wallet.provider.signTransaction(tx);
     const signature = await connection.sendRawTransaction(signedTx.serialize());
     await connection.confirmTransaction(signature, 'confirmed');
     
     console.log('✅ Bet placed:', signature);
     
-    // Save bet to backend
+    // Save to backend
     await fetch(CFG.API + '/bets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6574,7 +6597,7 @@ async function placeBet(matchId) {
     
     celebrateBet(amountInput, teamName, `${match.homeTeam} vs ${match.awayTeam}`);
     addBetToFeed(amountInput, teamName);
-    toast('✅ Bet placed! Tokens escrowed.', 'ok');
+    toast('✅ Bet placed!', 'ok');
     
     setTimeout(() => { loadMatches(); loadBalance(); }, 2000);
     
@@ -6587,6 +6610,7 @@ async function placeBet(matchId) {
     }
   }
 }
+
 // ══════════════════════════════════════════════════════════════════
 //  ULTIMATE BET FUNCTIONS
 // ══════════════════════════════════════════════════════════════════
