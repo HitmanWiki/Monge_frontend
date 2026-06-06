@@ -6494,39 +6494,45 @@ async function placeBet(matchId) {
   if (!match) return toast('Match not found', 'er');
   
   try {
-    toast('⏳ Preparing transaction...', '');
+    toast('⏳ Sending tokens to escrow...', '');
     
     const connection = new solanaWeb3.Connection(CFG.RPC_URL, 'confirmed');
     const { PublicKey, Transaction, TransactionInstruction, SystemProgram, SYSVAR_RENT_PUBKEY } = solanaWeb3;
     
-    const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    // 🔥 Auto-detect token program
+    const tokenMint = new PublicKey(CFG.TOKEN_MINT);
+    const mintInfo = await connection.getAccountInfo(tokenMint);
+    const TOKEN_PROGRAM_ID = mintInfo.owner; // Auto-detect!
+    console.log('Token program:', TOKEN_PROGRAM_ID.toString());
+    
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
     
     const userKey = new PublicKey(wallet.publicKey);
     const escrowKey = new PublicKey(CFG.ESCROW_WALLET);
-    const tokenMint = new PublicKey(CFG.TOKEN_MINT);
     
-    // Get REAL user ATA from blockchain
-    const userTokenAccounts = await connection.getTokenAccountsByOwner(userKey, { mint: tokenMint });
-    if (userTokenAccounts.value.length === 0) {
-      return toast('❌ No MONKE token found. Add MONKE to your wallet.', 'er');
-    }
-    const userATA = userTokenAccounts.value[0].pubkey;
-    
-    // Get escrow ATA
+    // Get correct ATAs using the detected token program
+    const [userATA] = PublicKey.findProgramAddressSync(
+      [userKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
     const [escrowATA] = PublicKey.findProgramAddressSync(
       [escrowKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), tokenMint.toBuffer()],
       ASSOCIATED_TOKEN_PROGRAM_ID
     );
     
-    // Check if escrow ATA exists
+    // Check accounts
+    const userATAInfo = await connection.getAccountInfo(userATA);
+    if (!userATAInfo) {
+      return toast('❌ MONKE token account not found. Add MONKE to your wallet first.', 'er');
+    }
+    
     const escrowATAInfo = await connection.getAccountInfo(escrowATA);
     
     const tx = new Transaction();
     
-    // Create escrow ATA if it doesn't exist
+    // Create escrow ATA if needed
     if (!escrowATAInfo) {
-      console.log('Creating escrow token account...');
+      console.log('Creating escrow ATA...');
       tx.add(new TransactionInstruction({
         keys: [
           { pubkey: userKey, isSigner: true, isWritable: true },
@@ -6545,7 +6551,7 @@ async function placeBet(matchId) {
     // Convert amount
     const amountRaw = Math.floor(parseFloat(amountInput) * Math.pow(10, CFG.TOKEN_DECIMALS));
     
-    // Build transfer instruction
+    // Build transfer instruction with CORRECT token program
     const data = new Uint8Array(9);
     data[0] = 3;
     const big = BigInt(amountRaw);
@@ -6557,7 +6563,7 @@ async function placeBet(matchId) {
         { pubkey: escrowATA, isSigner: false, isWritable: true },
         { pubkey: userKey, isSigner: true, isWritable: false },
       ],
-      programId: TOKEN_PROGRAM_ID,
+      programId: TOKEN_PROGRAM_ID, // 🔥 Correct program!
       data
     }));
     
